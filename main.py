@@ -184,7 +184,12 @@ def get_products_keyboard(category_id, brand_id):
     conn.close()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
     for p_id, name, price in products:
-        display_name = name.split(" — ", 1)[-1] if " — " in name else name
+        if " — " in name:
+            display_name = name.split(" — ", 1)[-1]
+        elif " - " in name:
+            display_name = name.split(" - ", 1)[-1]
+        else:
+            display_name = name
         keyboard.inline_keyboard.append([InlineKeyboardButton(text=f"🛍 {display_name} — {price}₽", callback_data=f"buy_{p_id}")])
     keyboard.inline_keyboard.append([InlineKeyboardButton(text="⬅️ Назад к брендам", callback_data=f"show_cat_{category_id}")])
     return keyboard
@@ -339,7 +344,7 @@ async def manual_remind_add(message: Message):
     await message.answer(f"✅ Напоминание на {hour:0>2}:{minute:0>2} установлено!", reply_markup=get_reminders_keyboard())
 
 
-# --- УМНЫЙ ПАРСЕР ПРАЙСА ---
+# --- УМНЫЙ УНИВЕРСАЛЬНЫЙ ПАРСЕР ПРАЙСА ---
 @dp.message(F.chat.id == MY_ID, Command("update"))
 async def update_assortment(message: Message):
     raw_text = message.text.replace("/update", "").strip()
@@ -395,10 +400,11 @@ async def update_assortment(message: Message):
             is_available = line.startswith("✅")
             clean_line = line[1:].strip()
             
-            qty_match = re.search(r'—\s*(\d+)\s*шт', clean_line)
+            qty_match = re.search(r'[-—]\s*(\d+)\s*шт', clean_line) or re.search(r'(\d+)\s*шт', clean_line)
             if qty_match:
                 quantity = int(qty_match.group(1))
                 full_name = clean_line[:qty_match.start()].strip()
+                full_name = full_name.rstrip("-— ").strip()
             else:
                 quantity = 1 if is_available else 0
                 full_name = clean_line
@@ -407,6 +413,8 @@ async def update_assortment(message: Message):
             
             if " — " in full_name:
                 brand_name = full_name.split(" — ", 1)[0].strip()
+            elif " - " in full_name:
+                brand_name = full_name.split(" - ", 1)[0].strip()
             elif " x " in full_name:
                 brand_name = full_name.split(" x ", 1)[0].strip()
             else:
