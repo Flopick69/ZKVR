@@ -68,7 +68,7 @@ def init_db():
     for emoji, cat_full_name in DEFAULT_CATS.items():
         cursor.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (cat_full_name,))
     
-    # Авто-добавление тестового товара
+    # Авто-добавление тестового товара, чтобы база не была пустой
     cursor.execute("SELECT COUNT(*) FROM products")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT OR IGNORE INTO brands (category_id, name) VALUES (1, 'Тест Бренд')")
@@ -246,34 +246,38 @@ async def show_product_card(callback: CallbackQuery):
     prod_id = int(callback.data.split("_")[1])
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT name, price, quantity, category_id FROM products WHERE id = ?", (prod_id,))
+    cursor.execute("SELECT name, price, quantity, category_id, brand_id FROM products WHERE id = ?", (prod_id,))
     product = cursor.fetchone()
     conn.close()
     
-    if not product or product[2] <= 0:
-        await callback.answer("❌ Товар только что закончился!", show_alert=True)
+    if not product:
+        await callback.answer("❌ Товар не найден!", show_alert=True)
         return
         
-    name, price, qty, cat_id = product
-    text = f"📦 **{name}**\n\n💰 Цена: {price} руб.\n🔹 В наличии: {qty} шт.\n\nНажмите кнопку ниже, чтобы забронировать товар."
+    name, price, qty, cat_id, brand_id = product
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔒 Забронировать 1 шт.", callback_data=f"book_{prod_id}")],
-        [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"back_to_brand_{prod_id}")]
-    ])
+    if qty <= 0:
+        text = f"📦 **{name}**\n\n❌ Извините, этот товар уже закончился."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"backbrand_{cat_id}_{brand_id}")]
+        ])
+    else:
+        text = f"📦 **{name}**\n\n💰 Цена: {price} руб.\n🔹 В наличии: {qty} шт.\n\nНажмите кнопку ниже, чтобы забронировать товар."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔒 Забронировать 1 шт.", callback_data=f"book_{prod_id}")],
+            [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"backbrand_{cat_id}_{brand_id}")]
+        ])
+        
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
-@dp.callback_query(F.data.startswith("back_to_brand_"))
-async def back_to_brand(callback: CallbackQuery):
-    prod_id = int(callback.data.split("_")[3])
-    conn = sqlite3.connect("shop_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT category_id, brand_id FROM products WHERE id = ?", (prod_id,))
-    res = cursor.fetchone()
-    conn.close()
-    if res:
-        callback.data = f"brand_{res[0]}_{res[1]}"
-        await show_products_by_brand(callback)
+# Надежный обработчик возврата назад к бренду по переданным ID
+@dp.callback_query(F.data.startswith("backbrand_"))
+async def back_to_brand_explicit(callback: CallbackQuery):
+    data = callback.data.split("_")
+    cat_id, brand_id = int(data[1]), int(data[2])
+    # Перенаправляем callback во внутренний метод отображения бренда
+    callback.data = f"brand_{cat_id}_{brand_id}"
+    await show_products_by_brand(callback)
 
 @dp.callback_query(F.data.startswith("book_"))
 async def process_booking(callback: CallbackQuery):
@@ -286,11 +290,13 @@ async def process_booking(callback: CallbackQuery):
     product = cursor.fetchone()
     
     if not product or product[2] <= 0:
-        await callback.answer("❌ Извините, товар закончился!", show_alert=True)
+        await callback.answer("❌ Извините, товар только что закончился!", show_alert=True)
         conn.close()
         return
         
     name, price, current_qty = product
+    
+    # Списываем 1 единицу и записываем в бронь
     cursor.execute("UPDATE products SET quantity = quantity - 1 WHERE id = ?", (prod_id,))
     cursor.execute("INSERT INTO bookings (user_id, product_id, quantity) VALUES (?, ?, 1)", (user_id, prod_id))
     conn.commit()
@@ -380,7 +386,6 @@ async def admin_minus_one(callback: CallbackQuery):
         await callback.answer("❌ Товар уже равен 0!", show_alert=True)
         
     conn.close()
-    # Обновляем карточку товара на экране админа
     await admin_edit_product_card(callback)
 
 @dp.callback_query(F.data.startswith("setzero_"))
