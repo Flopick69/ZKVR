@@ -1,6 +1,7 @@
 import os
 import re
 import sqlite3
+import sys
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -68,7 +69,7 @@ def init_db():
     for emoji, cat_full_name in DEFAULT_CATS.items():
         cursor.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (cat_full_name,))
     
-    # Авто-добавление тестового товара, чтобы база не была пустой
+    # Авто-добавление тестового товара
     cursor.execute("SELECT COUNT(*) FROM products")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT OR IGNORE INTO brands (category_id, name) VALUES (1, 'Тест Бренд')")
@@ -256,7 +257,7 @@ async def show_product_card(callback: CallbackQuery):
         
     name, price, qty, cat_id, brand_id = product
     
-    if qty <= 0:
+    if int(qty) <= 0:
         text = f"📦 **{name}**\n\n❌ Извините, этот товар уже закончился."
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"backbrand_{cat_id}_{brand_id}")]
@@ -270,43 +271,63 @@ async def show_product_card(callback: CallbackQuery):
         
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
-# Надежный обработчик возврата назад к бренду по переданным ID
 @dp.callback_query(F.data.startswith("backbrand_"))
 async def back_to_brand_explicit(callback: CallbackQuery):
     data = callback.data.split("_")
     cat_id, brand_id = int(data[1]), int(data[2])
-    # Перенаправляем callback во внутренний метод отображения бренда
     callback.data = f"brand_{cat_id}_{brand_id}"
     await show_products_by_brand(callback)
 
+# --- ИСПРАВЛЕННЫЙ И НАДЕЖНЫЙ МЕТОД БРОНИРОВАНИЯ ---
 @dp.callback_query(F.data.startswith("book_"))
 async def process_booking(callback: CallbackQuery):
     prod_id = int(callback.data.split("_")[1])
     user_id = callback.from_user.id
     
+    print(f"[LOG] Попытка бронирования товара с ID={prod_id} пользователем {user_id}", flush=True)
+    
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT name, price, quantity FROM products WHERE id = ?", (prod_id,))
+    
+    # Явно запрашиваем ID, чтобы проверить существование записи
+    cursor.execute("SELECT id, name, price, quantity FROM products WHERE id = ?", (prod_id,))
     product = cursor.fetchone()
     
-    if not product or product[2] <= 0:
-        await callback.answer("❌ Извините, товар только что закончился!", show_alert=True)
+    if not product:
+        print(f"[ERROR] Товар с ID={prod_id} вообще не найден в базе данных!", flush=True)
+        await callback.answer("❌ Ошибка: товар не найден в системе!", show_alert=True)
         conn.close()
         return
         
-    name, price, current_qty = product
+    p_id, name, price, current_qty = product
+    print(f"[LOG] Найден товар: {name}, Цена: {price}, Текущий остаток: {current_qty}", flush=True)
     
-    # Списываем 1 единицу и записываем в бронь
-    cursor.execute("UPDATE products SET quantity = quantity - 1 WHERE id = ?", (prod_id,))
-    cursor.execute("INSERT INTO bookings (user_id, product_id, quantity) VALUES (?, ?, 1)", (user_id, prod_id))
-    conn.commit()
+    if int(current_qty) <= 0:
+        print(f"[LOG] Бронирование отклонено: остаток равен {current_qty}", flush=True)
+        await callback.answer("❌ Извините, этот товар только что закончился!", show_alert=True)
+        conn.close()
+        return
+        
+    try:
+        # Уменьшаем остаток в базе данных
+        cursor.execute("UPDATE products SET quantity = quantity - 1 WHERE id = ?", (prod_id,))
+        # Добавляем запись в таблицу бронирования
+        cursor.execute("INSERT INTO bookings (user_id, product_id, quantity) VALUES (?, ?, 1)", (user_id, prod_id))
+        conn.commit()
+        print(f"[LOG] Успешно списана 1 единица. Запись брони создана.", flush=True)
+    except Exception as e:
+        print(f"[ERROR] Ошибка выполнения SQL-запроса при бронировании: {e}", flush=True)
+        await callback.answer("❌ Произошла внутренняя ошибка базы данных!", show_alert=True)
+        conn.close()
+        return
+        
     conn.close()
     
     success_text = f"🎉 **Товар успешно забронирован!**\n\nПозиция: {name}\nСумма к оплате: {price} руб.\n\n📱 Для покупки и встречи напишите администратору:\n@PornHub_Tag"
     await callback.message.edit_text(success_text, parse_mode="Markdown")
 
 
-# --- ОБРАБОТЧИКИ АДМИН-ПАНЕЛИ (С ИНЛАЙН-РЕДАКТИРОВАНИЕМ) ---
+# --- ОБРАБОТЧИКИ АДМИН-ПАНЕЛИ ---
 
 @dp.message(F.text == "📊 Посмотреть остатки")
 async def admin_view_stock(message: Message):
