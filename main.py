@@ -1,7 +1,6 @@
 import os
 import re
 import sqlite3
-import sys
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -15,7 +14,6 @@ MY_ID = 8344626747  # Замени на свой реальный Telegram ID
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Базовые категории с эмодзи
 DEFAULT_CATS = {
     "🌊": "🌊 Жидкости",
     "🔌": "🔌 Под-системы",
@@ -23,7 +21,6 @@ DEFAULT_CATS = {
     "⚠️": "⚠️ Снюс"
 }
 
-# Состояние для ожидания прайса от админа
 class AdminStates(StatesGroup):
     waiting_for_price = State()
 
@@ -31,50 +28,13 @@ class AdminStates(StatesGroup):
 def init_db():
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS brands (id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER, name TEXT, UNIQUE(category_id, name))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER, brand_id INTEGER, name TEXT, price INTEGER, quantity INTEGER)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, product_id INTEGER, quantity INTEGER)")
     
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS categories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS brands (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category_id INTEGER,
-            name TEXT,
-            UNIQUE(category_id, name)
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category_id INTEGER,
-            brand_id INTEGER,
-            name TEXT,
-            price INTEGER,
-            quantity INTEGER
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS bookings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            product_id INTEGER,
-            quantity INTEGER
-        )
-    """)
-    
-    # Создаем категории
     for emoji, cat_full_name in DEFAULT_CATS.items():
         cursor.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (cat_full_name,))
-    
-    # Авто-добавление тестового товара
-    cursor.execute("SELECT COUNT(*) FROM products")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT OR IGNORE INTO brands (category_id, name) VALUES (1, 'Тест Бренд')")
-        cursor.execute("INSERT OR REPLACE INTO products (category_id, brand_id, name, price, quantity) VALUES (1, 1, 'Тест Бренд — Тестовый вкус', 450, 5)")
-        
     conn.commit()
     conn.close()
 
@@ -91,17 +51,13 @@ def generate_stock_text(for_copy=False):
     for cat_id, cat_name in categories:
         cursor.execute("SELECT id, name, price, quantity FROM products WHERE category_id = ?", (cat_id,))
         products = cursor.fetchall()
-        
-        if not products:
-            continue
-            
+        if not products: continue
         has_items = True
         text += f"{cat_name}:\n"
         
         prices_dict = {}
         for prod_id, prod_name, p_price, p_qty in products:
-            if p_price not in prices_dict:
-                prices_dict[p_price] = []
+            if p_price not in prices_dict: prices_dict[p_price] = []
             prices_dict[p_price].append((prod_name, p_qty))
             
         for price, items in prices_dict.items():
@@ -113,9 +69,8 @@ def generate_stock_text(for_copy=False):
             
     if for_copy:
         text += "По поводу покупки писать:\n@PornHub_Tag\n⬇️⬇️⬇️⬇️⬇️\nСсылка на канал"
-        
     conn.close()
-    return text.strip() if has_items else "📋 Магазин пока пуст. Нажмите кнопку обновления прайса."
+    return text.strip() if has_items else "📋 Магазин пока пуст."
 
 def get_categories_markup(is_admin=False):
     conn = sqlite3.connect("shop_bot.db")
@@ -125,29 +80,17 @@ def get_categories_markup(is_admin=False):
     conn.close()
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-    prefix = "admcat_" if is_admin else "cat_"
+    prefix = "ac_" if is_admin else "c_"  # Ультракороткие префиксы
     for cat_id, cat_name in categories:
         keyboard.inline_keyboard.append([InlineKeyboardButton(text=cat_name, callback_data=f"{prefix}{cat_id}")])
     return keyboard
 
-# --- КЛАВИАТУРЫ МЕНЮ ---
 def get_main_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🛒 Начать покупки")],
-            [KeyboardButton(text="📦 Мои брони"), KeyboardButton(text="ℹ️ О нас")]
-        ],
-        resize_keyboard=True
-    )
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🛒 Начать покупки")], [KeyboardButton(text="📦 Мои брони"), KeyboardButton(text="ℹ️ О нас")]], resize_keyboard=True)
 
 def get_admin_main_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📊 Посмотреть остатки"), KeyboardButton(text="📋 Скопировать прайс")],
-            [KeyboardButton(text="🔄 Обновить прайс"), KeyboardButton(text="🧹 Очистить базу")]
-        ],
-        resize_keyboard=True
-    )
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📊 Посмотреть остатки"), KeyboardButton(text="📋 Скопировать прайс")], [[KeyboardButton(text="🔄 Обновить прайс"), KeyboardButton(text="🧹 Очистить базу")]]], resize_keyboard=True)
+
 
 # --- ОБРАБОТЧИКИ КЛИЕНТОВ ---
 
@@ -155,48 +98,40 @@ def get_admin_main_keyboard():
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     if message.from_user.id == MY_ID:
-        await message.answer("👋 Привет, Админ! Все команды теперь на кнопках. Выбирай нужное действие:", reply_markup=get_admin_main_keyboard())
+        await message.answer("👋 Привет, Админ! Навигация на кнопках:", reply_markup=get_admin_main_keyboard())
     else:
-        await message.answer(
-            f"Привет, {message.from_user.first_name}! 👋\nВыбери интересующую тебя категорию товаров ниже:", 
-            reply_markup=get_categories_markup(is_admin=False)
-        )
-        await message.answer("Или воспользуйся нижним меню для навигации:", reply_markup=get_main_keyboard())
+        await message.answer(f"Привет, {message.from_user.first_name}! 👋\nВыбери категорию:", reply_markup=get_categories_markup(is_admin=False))
+        await message.answer("Или используй меню:", reply_markup=get_main_keyboard())
 
 @dp.message(F.text == "🛒 Начать покупки")
 async def show_categories(message: Message):
-    await message.answer("Выбери интересующую тебя категорию товаров ниже:", reply_markup=get_categories_markup(is_admin=False))
+    await message.answer("Выбери категорию товара:", reply_markup=get_categories_markup(is_admin=False))
 
 @dp.message(F.text == "📦 Мои брони")
 async def show_user_bookings(message: Message):
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT b.id, p.name, p.price 
-        FROM bookings b 
-        JOIN products p ON b.product_id = p.id 
-        WHERE b.user_id = ?
-    """, (message.from_user.id,))
+    cursor.execute("SELECT b.id, p.name, p.price FROM bookings b JOIN products p ON b.product_id = p.id WHERE b.user_id = ?", (message.from_user.id,))
     my_books = cursor.fetchall()
     conn.close()
     
     if not my_books:
         await message.answer("🔒 У вас пока нет активных броней.")
         return
-        
     text = "📦 **Ваши текущие брони:**\n\n"
     total = 0
     for b_id, p_name, price in my_books:
         text += f"• {p_name} — {price} руб.\n"
         total += price
-    text += f"\n💰 Итого к оплате: **{total} руб.**\n\nДля выкупа свяжитесь с @PornHub_Tag"
+    text += f"\n💰 Итого: **{total} руб.**\n\nДля выкупа: @PornHub_Tag"
     await message.answer(text, parse_mode="Markdown")
 
 @dp.message(F.text == "ℹ️ О нас")
 async def cmd_about(message: Message):
-    await message.answer("🏪 **ZKVR SHOP**\n\nБыстрая выдача, оригинальный товар.\nПо всем вопросам: @PornHub_Tag", parse_mode="Markdown")
+    await message.answer("🏪 **ZKVR SHOP**\n\nПо всем вопросам: @PornHub_Tag", parse_mode="Markdown")
 
-@dp.callback_query(F.data.startswith("cat_"))
+# Клик на категорию (Пользователь) -> Список брендов
+@dp.callback_query(F.data.startswith("c_"))
 async def show_brands(callback: CallbackQuery):
     cat_id = int(callback.data.split("_")[1])
     conn = sqlite3.connect("shop_bot.db")
@@ -206,20 +141,21 @@ async def show_brands(callback: CallbackQuery):
     conn.close()
     
     if not brands:
-        await callback.answer("😔 В этой категории пока ничего нет в наличии!", show_alert=True)
+        await callback.answer("😔 В наличии ничего нет!", show_alert=True)
         return
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-    for brand_id, brand_name in brands:
-        keyboard.inline_keyboard.append([InlineKeyboardButton(text=brand_name, callback_data=f"brand_{cat_id}_{brand_id}")])
-    keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 Назад к категориям", callback_data="back_to_cats")])
-    await callback.message.edit_text("🔥 Выберите бренд/линейку:", reply_markup=keyboard)
+    for b_id, b_name in brands:
+        keyboard.inline_keyboard.append([InlineKeyboardButton(text=b_name, callback_data=f"b_{cat_id}_{b_id}")])
+    keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 К категориям", callback_data="b_cats")])
+    await callback.message.edit_text("🔥 Выберите бренд:", reply_markup=keyboard)
 
-@dp.callback_query(F.data == "back_to_cats")
+@dp.callback_query(F.data == "b_cats")
 async def back_to_categories_callback(callback: CallbackQuery):
-    await callback.message.edit_text("Выбери интересующую тебя категорию товаров ниже:", reply_markup=get_categories_markup(is_admin=False))
+    await callback.message.edit_text("Выбери категорию товара:", reply_markup=get_categories_markup(is_admin=False))
 
-@dp.callback_query(F.data.startswith("brand_"))
+# Клик на бренд -> Список товаров
+@dp.callback_query(F.data.startswith("b_"))
 async def show_products_by_brand(callback: CallbackQuery):
     data = callback.data.split("_")
     cat_id, brand_id = int(data[1]), int(data[2])
@@ -231,18 +167,18 @@ async def show_products_by_brand(callback: CallbackQuery):
     conn.close()
     
     if not products:
-        await callback.answer("❌ Товары этого бренда закончились!", show_alert=True)
+        await callback.answer("❌ Закончилось!", show_alert=True)
         return
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
     for prod_id, name, price, qty in products:
-        btn_text = f"{name} — {price}₽ ({qty} шт)"
-        keyboard.inline_keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"prod_{prod_id}")])
+        keyboard.inline_keyboard.append([InlineKeyboardButton(text=f"{name} — {price}₽", callback_data=f"p_{prod_id}")])
         
-    keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 Назад к брендам", callback_data=f"cat_{cat_id}")])
-    await callback.message.edit_text("⚡️ Выберите конкретную позицию:", reply_markup=keyboard)
+    keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 К брендам", callback_data=f"c_{cat_id}")])
+    await callback.message.edit_text("⚡️ Выберите позицию:", reply_markup=keyboard)
 
-@dp.callback_query(F.data.startswith("prod_"))
+# Клик на товар -> Карточка товара
+@dp.callback_query(F.data.startswith("p_"))
 async def show_product_card(callback: CallbackQuery):
     prod_id = int(callback.data.split("_")[1])
     conn = sqlite3.connect("shop_bot.db")
@@ -258,113 +194,89 @@ async def show_product_card(callback: CallbackQuery):
     name, price, qty, cat_id, brand_id = product
     
     if int(qty) <= 0:
-        text = f"📦 **{name}**\n\n❌ Извините, этот товар уже закончился."
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"backbrand_{cat_id}_{brand_id}")]
-        ])
+        text = f"📦 **{name}**\n\n❌ Извините, этот товар закончился."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data=f"b_{cat_id}_{brand_id}")]])
     else:
-        text = f"📦 **{name}**\n\n💰 Цена: {price} руб.\n🔹 В наличии: {qty} шт.\n\nНажмите кнопку ниже, чтобы забронировать товар."
+        text = f"📦 **{name}**\n\n💰 Цена: {price} руб.\n🔹 В наличии: {qty} шт."
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔒 Забронировать 1 шт.", callback_data=f"book_{prod_id}")],
-            [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"backbrand_{cat_id}_{brand_id}")]
+            [InlineKeyboardButton(text="🔒 Забронировать 1 шт.", callback_data=f"bk_{prod_id}")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data=f"b_{cat_id}_{brand_id}")]
         ])
         
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
-@dp.callback_query(F.data.startswith("backbrand_"))
-async def back_to_brand_explicit(callback: CallbackQuery):
-    data = callback.data.split("_")
-    cat_id, brand_id = int(data[1]), int(data[2])
-    callback.data = f"brand_{cat_id}_{brand_id}"
-    await show_products_by_brand(callback)
-
-# --- ИСПРАВЛЕННЫЙ И НАДЕЖНЫЙ МЕТОД БРОНИРОВАНИЯ ---
-@dp.callback_query(F.data.startswith("book_"))
+# НАДЕЖНОЕ БРОНИРОВАНИЕ
+@dp.callback_query(F.data.startswith("bk_"))
 async def process_booking(callback: CallbackQuery):
     prod_id = int(callback.data.split("_")[1])
     user_id = callback.from_user.id
     
-    print(f"[LOG] Попытка бронирования товара с ID={prod_id} пользователем {user_id}", flush=True)
-    
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
     
-    # Явно запрашиваем ID, чтобы проверить существование записи
-    cursor.execute("SELECT id, name, price, quantity FROM products WHERE id = ?", (prod_id,))
+    # Проверяем товар в БД напрямую по числовому ID
+    cursor.execute("SELECT name, price, quantity FROM products WHERE id = ?", (prod_id,))
     product = cursor.fetchone()
     
     if not product:
-        print(f"[ERROR] Товар с ID={prod_id} вообще не найден в базе данных!", flush=True)
-        await callback.answer("❌ Ошибка: товар не найден в системе!", show_alert=True)
+        await callback.answer("❌ Ошибка: товар не найден в базе данных!", show_alert=True)
         conn.close()
         return
         
-    p_id, name, price, current_qty = product
-    print(f"[LOG] Найден товар: {name}, Цена: {price}, Текущий остаток: {current_qty}", flush=True)
+    name, price, qty = product
     
-    if int(current_qty) <= 0:
-        print(f"[LOG] Бронирование отклонено: остаток равен {current_qty}", flush=True)
-        await callback.answer("❌ Извините, этот товар только что закончился!", show_alert=True)
+    if int(qty) <= 0:
+        await callback.answer("❌ Товар только что закончился!", show_alert=True)
         conn.close()
         return
         
     try:
-        # Уменьшаем остаток в базе данных
         cursor.execute("UPDATE products SET quantity = quantity - 1 WHERE id = ?", (prod_id,))
-        # Добавляем запись в таблицу бронирования
         cursor.execute("INSERT INTO bookings (user_id, product_id, quantity) VALUES (?, ?, 1)", (user_id, prod_id))
         conn.commit()
-        print(f"[LOG] Успешно списана 1 единица. Запись брони создана.", flush=True)
     except Exception as e:
-        print(f"[ERROR] Ошибка выполнения SQL-запроса при бронировании: {e}", flush=True)
-        await callback.answer("❌ Произошла внутренняя ошибка базы данных!", show_alert=True)
+        await callback.answer("❌ Ошибка записи в БД!", show_alert=True)
         conn.close()
         return
         
     conn.close()
-    
-    success_text = f"🎉 **Товар успешно забронирован!**\n\nПозиция: {name}\nСумма к оплате: {price} руб.\n\n📱 Для покупки и встречи напишите администратору:\n@PornHub_Tag"
-    await callback.message.edit_text(success_text, parse_mode="Markdown")
+    await callback.message.edit_text(f"🎉 **Товар забронирован!**\n\nПозиция: {name}\nСумма: {price} руб.\n\n📱 Для связи: @PornHub_Tag", parse_mode="Markdown")
 
 
-# --- ОБРАБОТЧИКИ АДМИН-ПАНЕЛИ ---
+# --- АДМИН-ПАНЕЛЬ ---
 
 @dp.message(F.text == "📊 Посмотреть остатки")
 async def admin_view_stock(message: Message):
     if message.from_user.id == MY_ID:
-        await message.answer("📊 **Панель управления остатками**\nВыбери категорию для ручного изменения количества:", 
-                             parse_mode="Markdown", reply_markup=get_categories_markup(is_admin=True))
+        await message.answer("📊 **Управление остатками**\nВыбери категорию:", parse_mode="Markdown", reply_markup=get_categories_markup(is_admin=True))
 
-@dp.callback_query(F.data.startswith("admcat_"))
+@dp.callback_query(F.data.startswith("ac_"))
 async def admin_show_products(callback: CallbackQuery):
     if callback.from_user.id != MY_ID: return
     cat_id = int(callback.data.split("_")[1])
     
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, price, quantity FROM products WHERE category_id = ?", (cat_id,))
+    cursor.execute("SELECT id, name, quantity FROM products WHERE category_id = ?", (cat_id,))
     products = cursor.fetchall()
     conn.close()
     
     if not products:
-        await callback.answer("В этой категории пока нет товаров!", show_alert=True)
+        await callback.answer("Тут пусто!", show_alert=True)
         return
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-    for prod_id, name, price, qty in products:
-        btn_text = f"⚙️ {name} ({qty} шт)"
-        keyboard.inline_keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"editprod_{prod_id}")])
-    
-    keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 Назад к категориям", callback_data="adm_back_to_cats")])
-    await callback.message.edit_text("⚙️ Выбери товар для изменения остатков:", reply_markup=keyboard)
+    for prod_id, name, qty in products:
+        keyboard.inline_keyboard.append([InlineKeyboardButton(text=f"⚙️ {name} ({qty} шт)", callback_data=f"ed_{prod_id}")])
+    keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="a_cats")])
+    await callback.message.edit_text("⚙️ Выбери товар для изменения:", reply_markup=keyboard)
 
-@dp.callback_query(F.data == "adm_back_to_cats")
+@dp.callback_query(F.data == "a_cats")
 async def admin_back_to_cats(callback: CallbackQuery):
     if callback.from_user.id != MY_ID: return
-    await callback.message.edit_text("📊 **Панель управления остатками**\nВыбери категорию:", 
-                                     parse_mode="Markdown", reply_markup=get_categories_markup(is_admin=True))
+    await callback.message.edit_text("📊 **Управление остатками**\nВыбери категорию:", parse_mode="Markdown", reply_markup=get_categories_markup(is_admin=True))
 
-@dp.callback_query(F.data.startswith("editprod_"))
+@dp.callback_query(F.data.startswith("ed_"))
 async def admin_edit_product_card(callback: CallbackQuery):
     if callback.from_user.id != MY_ID: return
     prod_id = int(callback.data.split("_")[1])
@@ -375,56 +287,42 @@ async def admin_edit_product_card(callback: CallbackQuery):
     product = cursor.fetchone()
     conn.close()
     
-    if not product:
-        await callback.answer("Товар не найден!")
-        return
-        
+    if not product: return
     name, price, qty, cat_id = product
-    text = f"🛠 **Редактирование товара:**\n\n📌 Название: {name}\n💰 Цена: {price} руб.\n📦 В наличии: **{qty}** шт."
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➖ Списать 1 шт.", callback_data=f"minus1_{prod_id}")],
-        [InlineKeyboardButton(text="❌ Поставить 0 (Нет в наличии)", callback_data=f"setzero_{prod_id}")],
-        [InlineKeyboardButton(text="🔙 Назад к списку товаров", callback_data=f"admcat_{cat_id}")]
+        [InlineKeyboardButton(text="➖ Списать 1 шт.", callback_data=f"m1_{prod_id}")],
+        [InlineKeyboardButton(text="❌ Поставить 0", callback_data=f"sz_{prod_id}")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=f"ac_{cat_id}")]
     ])
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    await callback.message.edit_text(f"🛠 **Редактор:**\n\n📌 {name}\n💰 Цена: {price}₽\n📦 Остаток: **{qty}** шт.", parse_mode="Markdown", reply_markup=keyboard)
 
-@dp.callback_query(F.data.startswith("minus1_"))
+@dp.callback_query(F.data.startswith("m1_"))
 async def admin_minus_one(callback: CallbackQuery):
     if callback.from_user.id != MY_ID: return
     prod_id = int(callback.data.split("_")[1])
-    
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT quantity FROM products WHERE id = ?", (prod_id,))
     res = cursor.fetchone()
-    
     if res and res[0] > 0:
         cursor.execute("UPDATE products SET quantity = quantity - 1 WHERE id = ?", (prod_id,))
         conn.commit()
-        await callback.answer("⬇️ Списана 1 единица товара!")
-    else:
-        await callback.answer("❌ Товар уже равен 0!", show_alert=True)
-        
     conn.close()
     await admin_edit_product_card(callback)
 
-@dp.callback_query(F.data.startswith("setzero_"))
+@dp.callback_query(F.data.startswith("sz_"))
 async def admin_set_zero(callback: CallbackQuery):
     if callback.from_user.id != MY_ID: return
     prod_id = int(callback.data.split("_")[1])
-    
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
     cursor.execute("UPDATE products SET quantity = 0 WHERE id = ?", (prod_id,))
     conn.commit()
     conn.close()
-    
-    await callback.answer("❌ Товар полностью списан (0 шт)!")
     await admin_edit_product_card(callback)
 
-
-# --- ОСТАЛЬНЫЕ КНОПКИ АДМИНА ---
+# --- УПРАВЛЕНИЕ ПРАЙСОМ ---
 
 @dp.message(F.text == "📋 Скопировать прайс")
 async def admin_copy_stock(message: Message):
@@ -437,38 +335,29 @@ async def clear_database_button(message: Message):
     if message.from_user.id == MY_ID:
         conn = sqlite3.connect("shop_bot.db")
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM products")
-        cursor.execute("DELETE FROM brands")
-        cursor.execute("DELETE FROM bookings")
-        conn.commit()
-        conn.close()
-        await message.answer("🧹 База данных успешно очищена! Магазин пуст.")
+        cursor.execute("DELETE FROM products"); cursor.execute("DELETE FROM brands"); cursor.execute("DELETE FROM bookings")
+        conn.commit(); conn.close()
+        await message.answer("🧹 База очищена!")
 
 @dp.message(F.text == "🔄 Обновить прайс")
 async def admin_update_request(message: Message, state: FSMContext):
     if message.from_user.id == MY_ID:
         await state.set_state(AdminStates.waiting_for_price)
-        await message.answer("📥 Отправь мне новый прайс-лист обычным текстовым сообщением (команды писать не нужно).\n\n_Для отмены отправь слово 'отмена'_")
+        await message.answer("📥 Отправь новый прайс текстом. Для отмены напиши 'отмена'.")
 
 @dp.message(AdminStates.waiting_for_price)
 async def process_admin_price_list(message: Message, state: FSMContext):
-    if message.from_user.id != MY_ID:
-        await state.clear()
-        return
-
+    if message.from_user.id != MY_ID: return
     raw_text = message.text.strip()
-    if raw_text.lower() in ["отмена", "cancel", "назад"]:
+    if raw_text.lower() in ["отмена", "назад"]:
         await state.clear()
-        await message.answer("❌ Обновление прайса отменено.", reply_markup=get_admin_main_keyboard())
+        await message.answer("❌ Отменено.", reply_markup=get_admin_main_keyboard())
         return
 
     lines = raw_text.split("\n")
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
-    
-    cursor.execute("DELETE FROM products")
-    cursor.execute("DELETE FROM brands")
-    cursor.execute("DELETE FROM bookings")
+    cursor.execute("DELETE FROM products"); cursor.execute("DELETE FROM brands"); cursor.execute("DELETE FROM bookings")
     
     added_count = 0
     cursor.execute("SELECT id FROM categories WHERE name = ?", ("🌊 Жидкости",))
@@ -504,7 +393,6 @@ async def process_admin_price_list(message: Message, state: FSMContext):
             if line.startswith("✅") or line.startswith("❌"):
                 is_available = line.startswith("✅")
                 clean_line = line[1:].strip()
-                
                 clean_line_before_brackets = clean_line.split("(")[0].strip()
                 qty_match = re.search(r'[-—]\s*(\d+)\s*шт', clean_line_before_brackets) or re.search(r'(\d+)\s*шт', clean_line_before_brackets)
                 
@@ -521,41 +409,24 @@ async def process_admin_price_list(message: Message, state: FSMContext):
                 elif " - " in full_name: brand_name = full_name.split(" - ", 1)[0].strip()
                 else: brand_name = full_name.split(" ")[0].strip() if " " in full_name else "Разное"
                     
-                temp_products.append({
-                    'cat_id': current_cat_id,
-                    'brand_name': brand_name,
-                    'full_name': full_name,
-                    'price': current_block_price,
-                    'quantity': quantity
-                })
-        except Exception:
-            continue
+                temp_products.append({'cat_id': current_cat_id, 'brand_name': brand_name, 'full_name': full_name, 'price': current_block_price, 'quantity': quantity})
+        except Exception: continue
 
     for prod in temp_products:
         try:
-            if prod['price'] is None:
-                prod['price'] = 450
-                
+            if prod['price'] is None: prod['price'] = 450
             cursor.execute("INSERT OR IGNORE INTO brands (category_id, name) VALUES (?, ?)", (prod['cat_id'], prod['brand_name']))
             cursor.execute("SELECT id FROM brands WHERE category_id = ? AND name = ?", (prod['cat_id'], prod['brand_name']))
             brand_id = cursor.fetchone()[0]
-            
-            cursor.execute(
-                "INSERT OR REPLACE INTO products (category_id, brand_id, name, price, quantity) VALUES (?, ?, ?, ?, ?)",
-                (prod['cat_id'], brand_id, prod['full_name'], prod['price'], prod['quantity'])
-            )
+            cursor.execute("INSERT OR REPLACE INTO products (category_id, brand_id, name, price, quantity) VALUES (?, ?, ?, ?, ?)", (prod['cat_id'], brand_id, prod['full_name'], prod['price'], prod['quantity']))
             added_count += 1
-        except Exception:
-            continue
+        except Exception: continue
             
-    conn.commit()
-    conn.close()
-    
+    conn.commit(); conn.close()
     await state.clear()
-    await message.answer(f"✅ База успешно обновлена кнопкой! Загружено позиций: {added_count}", reply_markup=get_admin_main_keyboard())
-
+    await message.answer(f"✅ Успешно! Загружено позиций: {added_count}", reply_markup=get_admin_main_keyboard())
 
 if __name__ == "__main__":
     init_db()
-    print("Бот успешно запущен!")
+    print("Бот запущен!")
     dp.run_polling(bot)
