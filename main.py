@@ -8,8 +8,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 # Токен твоего бота и ID администратора
-BOT_TOKEN = "ТВОЙ_ТОКЕН_БОТА"
-MY_ID = 123456789  # Замени на свой реальный Telegram ID
+BOT_TOKEN = "8940239980:AAH1u8qqQo9MtSpv4KHLlRcr6ckm3s3_ZQI"
+MY_ID = 8344626747  # Замени на свой реальный Telegram ID
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
