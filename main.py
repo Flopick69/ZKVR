@@ -147,7 +147,7 @@ def get_admin_main_keyboard():
         [InlineKeyboardButton(text="🔔 Настройка напоминаний", callback_data="admin_go_remind")]
     ])
 
-# --- НАСТРОЙКА КНОПОК КЛИЕНТА С РАЗДЕЛЕНИЕМ НА БРЕНДЫ ---
+# --- НАСТРОЙКА КНОПОК КЛИЕНТА ---
 def get_categories_keyboard():
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
@@ -184,13 +184,11 @@ def get_products_keyboard(category_id, brand_id):
     conn.close()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
     for p_id, name, price in products:
-        # Показываем только оставшуюся часть названия (вкус / модель)
         display_name = name.split(" — ", 1)[-1] if " — " in name else name
         keyboard.inline_keyboard.append([InlineKeyboardButton(text=f"🛍 {display_name} — {price}₽", callback_data=f"buy_{p_id}")])
     keyboard.inline_keyboard.append([InlineKeyboardButton(text="⬅️ Назад к брендам", callback_data=f"show_cat_{category_id}")])
     return keyboard
 
-# Кнопки для админского удаления
 def get_admin_delete_cats():
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
@@ -341,7 +339,7 @@ async def manual_remind_add(message: Message):
     await message.answer(f"✅ Напоминание на {hour:0>2}:{minute:0>2} установлено!", reply_markup=get_reminders_keyboard())
 
 
-# --- УМНЫЙ ПАРСЕР ПРАЙСА С ОПРЕДЕЛЕНИЕМ ПРОИЗВОДИТЕЛЯ ---
+# --- УМНЫЙ ПАРСЕР ПРАЙСА ---
 @dp.message(F.chat.id == MY_ID, Command("update"))
 async def update_assortment(message: Message):
     raw_text = message.text.replace("/update", "").strip()
@@ -353,7 +351,6 @@ async def update_assortment(message: Message):
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
     
-    # Полная чистка перед заливкой
     cursor.execute("DELETE FROM products")
     cursor.execute("DELETE FROM brands")
     cursor.execute("DELETE FROM bookings")
@@ -376,7 +373,6 @@ async def update_assortment(message: Message):
         if not line: continue
         line_lower = line.lower()
         
-        # Смена категории
         cat_changed = False
         for trigger, cat_full_name in cat_triggers.items():
             if trigger in line_lower and "цена" not in line_lower:
@@ -387,7 +383,6 @@ async def update_assortment(message: Message):
                 break
         if cat_changed: continue
         
-        # Ловим строчку с ценой
         price_match = re.search(r'(?:цена|Цена):\s*(\d+)', line)
         if price_match:
             block_price = int(price_match.group(1))
@@ -396,7 +391,6 @@ async def update_assortment(message: Message):
                     prod['price'] = block_price
             continue
             
-        # Ловим товар
         if line.startswith("✅") or line.startswith("❌"):
             is_available = line.startswith("✅")
             clean_line = line[1:].strip()
@@ -411,14 +405,11 @@ async def update_assortment(message: Message):
                 
             if not is_available: quantity = 0
             
-            # Умное деление на Производителя и Вкус
-            # Берем текст до первого знака "—" или до первого пробела, если знака нет
             if " — " in full_name:
                 brand_name = full_name.split(" — ", 1)[0].strip()
             elif " x " in full_name:
                 brand_name = full_name.split(" x ", 1)[0].strip()
             else:
-                # Если разделителей нет (например "BRUSKO FEELIN MINI"), берем первое слово как бренд
                 brand_name = full_name.split(" ")[0].strip() if " " in full_name else "Разное"
                 
             temp_products.append({
@@ -429,12 +420,10 @@ async def update_assortment(message: Message):
                 'quantity': quantity
             })
 
-    # Сохраняем всё в базу данных
     try:
         for prod in temp_products:
             final_price = prod['price'] if prod['price'] is not None else 400
             
-            # Создаем или находим производителя для этой категории
             cursor.execute("INSERT OR IGNORE INTO brands (category_id, name) VALUES (?, ?)", (prod['cat_id'], prod['brand_name']))
             cursor.execute("SELECT id FROM brands WHERE category_id = ? AND name = ?", (prod['cat_id'], prod['brand_name']))
             brand_id = cursor.fetchone()[0]
@@ -453,7 +442,7 @@ async def update_assortment(message: Message):
     finally: 
         conn.close()
 
-# Коллбэки удаления для админа
+# Коллбэки удаления
 @dp.callback_query(F.data.startswith("delcat_list_"))
 async def delcat_list(callback: CallbackQuery):
     cat_id = int(callback.data.split("_")[2])
@@ -487,19 +476,16 @@ async def delcat_confirm(callback: CallbackQuery):
 async def client_main_menu(callback: CallbackQuery): 
     await callback.message.edit_text("Выбери категорию товара:", reply_markup=get_categories_keyboard())
 
-# Клик по категории -> Показываем производителей (Бренды)
 @dp.callback_query(F.data.startswith("show_cat_"))
-импорт sqlite3 def client_show_cat(callback: CallbackQuery):
+async def client_show_cat(callback: CallbackQuery):
     cat_id = int(callback.data.split("_")[2])
     await callback.message.edit_text("Выбери производителя / бренд:", reply_markup=get_brands_keyboard(cat_id))
 
-# Клик по бренду -> Показываем вкусы/модели
 @dp.callback_query(F.data.startswith("show_brand_"))
 async def client_show_brand(callback: CallbackQuery):
     _, _, cat_id, brand_id = callback.data.split("_")
     await callback.message.edit_text("Выбери интересующий вкус или позицию:", reply_markup=get_products_keyboard(int(cat_id), int(brand_id)))
 
-# Клик по товару -> Бронь
 @dp.callback_query(F.data.startswith("buy_"))
 async def handle_purchase(callback: CallbackQuery):
     product_id = callback.data.split("_")[1]
@@ -522,7 +508,6 @@ async def handle_purchase(callback: CallbackQuery):
     client_link = f"https://t.me/{raw_username}" if raw_username != "без_юзернейма" else f"tg://user?id={user_id}"
     await bot.send_message(chat_id=MY_ID, text=f"🚨 <b>НОВЫЙ ЗАКАЗ!</b>\n\n📦 <b>Товар:</b> {p_name}\n👤 <b>Покупатель:</b> @{raw_username}\n\n🔗 <a href='{client_link}'>НАПИСАТЬ КЛИЕНТУ</a>", reply_markup=admin_keyboard, parse_mode="HTML")
 
-# Админские кнопки обработки заказов
 @dp.callback_query(F.data.startswith("admin_"))
 async def handle_admin_buttons(callback: CallbackQuery):
     action, booking_id = callback.data.split("_")[1:]
