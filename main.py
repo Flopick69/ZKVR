@@ -214,7 +214,6 @@ def get_products_keyboard(category_id):
 
 # --- ХЕНДЛЕРЫ АДМИНКИ ---
 
-# Стартовый хендлер: Шпаргалка по командам + Главные кнопки
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
     if message.from_user.id == MY_ID:
@@ -235,12 +234,10 @@ async def start_cmd(message: Message):
     else:
         await message.answer(f"Привет, {message.from_user.first_name}! 👋\nВыбери интересующую тебя категорию товаров ниже:", reply_markup=get_categories_keyboard())
 
-# Возврат в главное меню
 @dp.callback_query(F.data == "admin_back_main")
 async def admin_back_main_callback(callback: CallbackQuery):
     await callback.message.edit_text("🎛 **Главное меню администратора:**", reply_markup=get_admin_main_keyboard())
 
-# Кнопка: Получить прайс
 @dp.callback_query(F.data == "admin_get_stock")
 async def admin_get_stock_callback(callback: CallbackQuery):
     await callback.answer()
@@ -249,7 +246,6 @@ async def admin_get_stock_callback(callback: CallbackQuery):
     await callback.message.answer("📋 **Актуальный прайс-лист получен!**\n\nТапни по тексту ниже для копирования:", parse_mode="Markdown")
     await callback.message.answer(post_text, reply_markup=keyboard, parse_mode="Markdown")
 
-# Кнопка: Запрос на обновление прайса
 @dp.callback_query(F.data == "admin_req_update")
 async def admin_req_update_callback(callback: CallbackQuery):
     await callback.message.edit_text(
@@ -257,18 +253,16 @@ async def admin_req_update_callback(callback: CallbackQuery):
         "Скопируй свой прайс-лист, добавь в самый верх строчку `/update` и отправь её мне ответным сообщением.\n\n"
         "Пример:\n"
         "`/update`\n"
-        "`Цена: 400`\n"
-        "`✅Анархия V2 — Клюква`", 
+        "`✅Анархия V2 — Клюква`\n"
+        "`Цена: 400`", 
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back_main")]])
     )
 
-# Кнопка: Переход к удалению
 @dp.callback_query(F.data == "admin_go_delete")
 async def admin_go_delete_callback(callback: CallbackQuery):
     await callback.message.edit_text("🗑 **Управление удалением**\n\nВыбери группу, чтобы посмотреть товары, или нажми «Снести группу»:", reply_markup=get_admin_delete_cats())
 
-# Кнопка: Переход к напоминаниям
 @dp.callback_query(F.data == "admin_go_remind")
 async def admin_go_remind_callback(callback: CallbackQuery):
     await callback.message.edit_text(
@@ -276,7 +270,6 @@ async def admin_go_remind_callback(callback: CallbackQuery):
         reply_markup=get_reminders_keyboard()
     )
 
-# Обработка напоминаний (Добавление/Удаление кликами)
 @dp.callback_query(F.data.startswith("remadd_"))
 async def remadd_callback(callback: CallbackQuery):
     _, hour, minute = callback.data.split("_")
@@ -302,7 +295,6 @@ async def remdel_callback(callback: CallbackQuery):
     await callback.answer("Удалено!")
     await callback.message.edit_reply_markup(reply_markup=get_reminders_keyboard())
 
-# Ручные команды админа (на всякий случай)
 @dp.message(F.chat.id == MY_ID, Command("stock"))
 async def check_stock_cmd(message: Message): await send_to_top_shmot()
 
@@ -336,54 +328,100 @@ async def manual_remind_add(message: Message):
     load_reminders()
     await message.answer(f"✅ Напоминание на {hour:0>2}:{minute:0>2} установлено!", reply_markup=get_reminders_keyboard())
 
-# Парсер прайса (/update)
+# --- УМНЫЙ ПАРСЕР ПРАЙСА ---
 @dp.message(F.chat.id == MY_ID, Command("update"))
 async def update_assortment(message: Message):
     raw_text = message.text.replace("/update", "").strip()
     if not raw_text:
         await message.answer("❌ Пришли прайс-лист после команды `/update`!")
         return
+    
     lines = raw_text.split("\n")
     conn = sqlite3.connect("shop_bot.db")
     cursor = conn.cursor()
+    
+    # Очищаем товары перед перезаливкой
+    cursor.execute("DELETE FROM products")
+    cursor.execute("DELETE FROM bookings")
+    
     added_count = 0
-    current_price = None
     current_cat_id = 1
-    cat_triggers = {"жидкост": "🌊 Жидкости", "жижа": "🌊 Жидкости", "🌊": "🌊 Жидкости", "под-систем": "🔌 Под-системы", "под ": "🔌 Под-системы", "🔌": "🔌 Под-системы", "расходник": "⚙️ Расходники / Испарители", "испарител": "⚙️ Расходники / Испарители", "картридж": "⚙️ Расходники / Испарители", "⚙️": "⚙️ Расходники / Испарители", "снюс": "⚠️ Снюс", "⚠️": "⚠️ Снюс"}
+    
+    cat_triggers = {
+        "жидкост": "🌊 Жидкости", "жижа": "🌊 Жидкости", "🌊": "🌊 Жидкости", 
+        "под-систем": "🔌 Под-системы", "под ": "🔌 Под-системы", "🔌": "🔌 Под-системы", 
+        "расходник": "⚙️ Расходники / Испарители", "испарител": "⚙️ Расходники / Испарители", 
+        "картридж": "⚙️ Расходники / Испарители", "⚙️": "⚙️ Расходники / Испарители", 
+        "снюс": "⚠️ Снюс", "⚠️": "⚠️ Снюс"
+    }
+    
+    temp_products = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line: continue
+        line_lower = line.lower()
+        
+        # Проверяем триггеры смены категории
+        cat_changed = False
+        for trigger, cat_full_name in cat_triggers.items():
+            if trigger in line_lower and "цена" not in line_lower:
+                cursor.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (cat_full_name,))
+                cursor.execute("SELECT id FROM categories WHERE name = ?", (cat_full_name,))
+                current_cat_id = cursor.fetchone()[0]
+                cat_changed = True
+                break
+        if cat_changed: continue
+        
+        # Если встречаем строчку с ценой, закрываем блок товаров сверху
+        price_match = re.search(r'(?:цена|Цена):\s*(\d+)', line)
+        if price_match:
+            block_price = int(price_match.group(1))
+            # Присваиваем цену всем позициям выше, у которых цена ещё не определена
+            for prod in temp_products:
+                if prod['price'] is None:
+                    prod['price'] = block_price
+            continue
+            
+        # Считывание самого товара
+        if line.startswith("✅") or line.startswith("❌"):
+            is_available = line.startswith("✅")
+            clean_line = line[1:].strip()
+            
+            qty_match = re.search(r'—\s*(\d+)\s*шт', clean_line)
+            if qty_match:
+                quantity = int(qty_match.group(1))
+                name = clean_line[:qty_match.start()].strip()
+            else:
+                quantity = 1 if is_available else 0
+                name = clean_line
+                
+            if not is_available: quantity = 0
+            
+            temp_products.append({
+                'cat_id': current_cat_id,
+                'name': name,
+                'price': None, # Определится ниже по тексту строки "Цена"
+                'quantity': quantity
+            })
+
+    # Пушим собранные и оцененные товары в базу
     try:
-        for line in lines:
-            line = line.strip()
-            if not line: continue
-            line_lower = line.lower()
-            for trigger, cat_full_name in cat_triggers.items():
-                if trigger in line_lower and "цена" not in line_lower:
-                    cursor.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (cat_full_name,))
-                    cursor.execute("SELECT id FROM categories WHERE name = ?", (cat_full_name,))
-                    current_cat_id = cursor.fetchone()[0]
-                    break
-            price_match = re.search(r'(?:цена|Цена):\s*(\d+)', line)
-            if price_match:
-                current_price = int(price_match.group(1))
-                continue
-            if line.startswith("✅") or line.startswith("❌"):
-                is_available = line.startswith("✅")
-                clean_line = line[1:].strip()
-                qty_match = re.search(r'—\s*(\d+)\s*шт', clean_line)
-                if qty_match:
-                    quantity = int(qty_match.group(1))
-                    name = clean_line[:qty_match.start()].strip()
-                else:
-                    quantity = 1 if is_available else 0
-                    name = clean_line
-                if not is_available: quantity = 0
-                price = current_price if current_price is not None else 400
-                cursor.execute("INSERT OR REPLACE INTO products (category_id, name, price, quantity) VALUES (?, ?, ?, ?)", (current_cat_id, name, price, quantity))
-                added_count += 1
+        for prod in temp_products:
+            final_price = prod['price'] if prod['price'] is not None else 400
+            cursor.execute(
+                "INSERT OR REPLACE INTO products (category_id, name, price, quantity) VALUES (?, ?, ?, ?)",
+                (prod['cat_id'], prod['name'], final_price, prod['quantity'])
+            )
+            added_count += 1
+            
         conn.commit()
         await message.answer(f"✅ Успешно обновлено позиций: {added_count}")
         await message.answer(generate_stock_text(for_copy=False), reply_markup=get_admin_main_keyboard())
-    except Exception as e: await message.answer(f"❌ Ошибка: {e}")
-    finally: conn.close()
+    except Exception as e: 
+        await message.answer(f"❌ Ошибка при сохранении в базу: {e}")
+    finally: 
+        conn.close()
 
 # Коллбэки удаления товаров
 @dp.callback_query(F.data.startswith("delcat_list_"))
@@ -412,7 +450,7 @@ async def delcat_confirm(callback: CallbackQuery):
     await callback.answer("Группа и товары удалены!")
     await callback.message.edit_reply_markup(reply_markup=get_admin_delete_cats())
 
-# Кнопки заказов (Продано/Отмена)
+# Кнопки админа для обработки заказов
 @dp.callback_query(F.data.startswith("admin_"))
 async def handle_admin_buttons(callback: CallbackQuery):
     action, booking_id = callback.data.split("_")[1:]
@@ -436,6 +474,7 @@ async def handle_admin_buttons(callback: CallbackQuery):
 # --- ХЕНДЛЕРЫ КЛИЕНТОВ ---
 @dp.callback_query(F.data == "main_menu")
 async def client_main_menu(callback: CallbackQuery): await callback.message.edit_text("Выбери категорию товара:", reply_markup=get_categories_keyboard())
+
 @dp.callback_query(F.data.startswith("show_cat_"))
 async def client_show_cat(callback: CallbackQuery):
     cat_id = int(callback.data.split("_")[2])
