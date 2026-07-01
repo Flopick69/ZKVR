@@ -112,7 +112,7 @@ async def send_to_top_shmot():
     post_text = generate_stock_text(for_copy=True)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📥 Перейти в предложку Топ Шмот", url="https://t.me/anonquebot?start=aovablu")]])
     try:
-        await bot.send_message(chat_id=MY_ID, text="⏰ **Напоминание! Время выложить новый прайс-лист!**\n\nТапни по тексту ниже, чтобы скопировать:", parse_mode="Markdown")
+        await bot.send_message(chat_id=MY_ID, text="⏰ **Напоминание! Время выложить новый прайс-лист!**\n\nТапни по тексту ниже для копирования:", parse_mode="Markdown")
         await bot.send_message(chat_id=MY_ID, text=post_text, reply_markup=keyboard, parse_mode="Markdown")
     except Exception as e: print(f"Ошибка рассылки: {e}")
 
@@ -310,7 +310,7 @@ async def check_stock_cmd(message: Message): await send_to_top_shmot()
 async def delete_menu_cmd(message: Message): await message.answer("🛠 **Управление удалением**", reply_markup=get_admin_delete_cats())
 
 @dp.message(F.chat.id == MY_ID, Command("remind"))
-async def remind_menu_cmd(message: Message): await message.answer("🔔 **Настройка расписания**", reply_markup=get_reminders_keyboard())
+async def remind_menu_cmd(message: Message): await message.answer("🔔 **Настройка напоминаний**", reply_markup=get_reminders_keyboard())
 
 @dp.message(F.chat.id == MY_ID, Command("clear"))
 async def clear_stock_cmd(message: Message):
@@ -410,65 +410,65 @@ async def delcat_confirm(callback: CallbackQuery):
     cursor.execute("DELETE FROM categories WHERE id = ?", (cat_id,))
     conn.commit(); conn.close()
     await callback.answer("Группа и товары удалены!")
-    ждать обратный вызов.сообщение.редактировать_разметку_ответа(ответ_разметка=get_admin_delete_cats())
+    await callback.message.edit_reply_markup(reply_markup=get_admin_delete_cats())
 
 # Кнопки заказов (Продано/Отмена)
-@dp.callback_query(Ф.данные.начинает с("админ_"))
-асинхронный деф handle_admin_buttons(обратный вызов: CallbackQuery):
-    действие, booking_id = обратный вызов.данные.расколоть("_")[1:]
-    conn = sqlite3.соединять("shop_bot.db")
-    курсор = conn.курсор()
-    если действие == "продан":
-        курсор.выполнять("УДАЛИТЬ ИЗ бронирований, ГДЕ id = ?", (идентификатор_бронирования,))
-        конн.совершить()
-        ждать обратный вызов.сообщение.редактировать_текст(ф"{обратный вызов.сообщение.текст}\n\n✅ Продано.", режим_анализа="HTML")
-    Элиф действие == "отмена":
-        курсор.выполнять("ВЫБЕРИТЕ product_id ИЗ бронирований, ГДЕ id = ?", (идентификатор_бронирования,))
-        res = курсор.фетчон()
-        если рез:
-            курсор.выполнять("ОБНОВЛЕНИЕ продуктов УСТАНОВИТЬ количество = количество + 1 ГДЕ id = ?", (рез[0],))
-            курсор.выполнять("УДАЛИТЬ ИЗ бронирований, ГДЕ id = ?", (идентификатор_бронирования,))
-            конн.совершить()
-            ждать обратный вызов.сообщение.редактировать_текст(ф"{обратный вызов.сообщение.текст}\n\n❌ Отменено.", режим_анализа="HTML")
-    конн.закрывать()
+@dp.callback_query(F.data.startswith("admin_"))
+async def handle_admin_buttons(callback: CallbackQuery):
+    action, booking_id = callback.data.split("_")[1:]
+    conn = sqlite3.connect("shop_bot.db")
+    cursor = conn.cursor()
+    if action == "sold":
+        cursor.execute("DELETE FROM bookings WHERE id = ?", (booking_id,))
+        conn.commit()
+        await callback.message.edit_text(f"{callback.message.text}\n\n✅ Продано.", parse_mode="HTML")
+    elif action == "cancel":
+        cursor.execute("SELECT product_id FROM bookings WHERE id = ?", (booking_id,))
+        res = cursor.fetchone()
+        if res:
+            cursor.execute("UPDATE products SET quantity = quantity + 1 WHERE id = ?", (res[0],))
+            cursor.execute("DELETE FROM bookings WHERE id = ?", (booking_id,))
+            conn.commit()
+            await callback.message.edit_text(f"{callback.message.text}\n\n❌ Отменено.", parse_mode="HTML")
+    conn.close()
 
 
 # --- ХЕНДЛЕРЫ КЛИЕНТОВ ---
-@dp.callback_query(Ф.данные == "главное_меню")
-асинхронный деф клиент_главное_меню(обратный вызов: CallbackQuery): ждать обратный вызов.сообщение.редактировать_текст("Выбери категорию товара:", ответ_разметка=получить_категории_клавиатуры())
-@dp.callback_query(Ф.данные.начинает с("показать_кошку_"))
-асинхронный деф клиент_показать_кота(обратный вызов: CallbackQuery):
-    cat_id = инт(обратный вызов.данные.расколоть("_")[2])
-    ждать обратный вызов.сообщение.редактировать_текст("Выбирай позицию для брони:", ответ_разметка=получить_продукты_клавиатура(cat_id))
+@dp.callback_query(F.data == "main_menu")
+async def client_main_menu(callback: CallbackQuery): await callback.message.edit_text("Выбери категорию товара:", reply_markup=get_categories_keyboard())
+@dp.callback_query(F.data.startswith("show_cat_"))
+async def client_show_cat(callback: CallbackQuery):
+    cat_id = int(callback.data.split("_")[2])
+    await callback.message.edit_text("Выбирай позицию для брони:", reply_markup=get_products_keyboard(cat_id))
 
-@dp.callback_query(Ф.данные.начинает с("купить_"))
-асинхронный деф handle_покупка(обратный вызов: CallbackQuery):
-    product_id = обратный вызов.данные.расколоть("_")[1]
-    user_id = обратный вызов.от_пользователя.идентификатор
-    raw_username = обратный вызов.от_пользователя.имя пользователя или "без_юзернейма"
-    conn = sqlite3.соединять("shop_bot.db")
-    курсор = conn.курсор()
-    курсор.выполнять("ВЫБЕРИТЕ название, цену, количество ИЗ продуктов, ГДЕ id = ?", (идентификатор_продукта,))
-    продукт = курсор.фетчон()
-    если нет продукт или продукт[2] <= 0:
-        ждать обратный вызов.отвечать("Извини, товар уже закончился! 😢", показать_оповещение=Истинный)
-        конн.закрывать(); возвращаться
-    p_имя, p_цена, _ = продукт
-    курсор.выполнять("ОБНОВЛЕНИЕ продуктов УСТАНОВИТЬ количество = количество - 1 ГДЕ id = ?", (идентификатор_продукта,))
-    курсор.выполнять("ВСТАВИТЬ В бронирования (user_id, имя пользователя, product_id) ЗНАЧЕНИЯ (?, ?, ?)", (user_id, raw_username, product_id))
-    конн.совершить(); booking_id = курсор.ластровид; конн.закрывать()
-    ждать обратный вызов.сообщение.отвечать(f"✅ <b>Забронировано:</b> {хд.цитировать(p_имя)} ({p_цена}₽).", режим_анализа="HTML")
-    ждать обратный вызов.отвечать()
-    admin_клавиатура = InlineKeyboardMarkup(встроенная_клавиатура=[[Кнопка встроенной клавиатуры(текст="✅ Продано", обратные_данные=f"admin_sold_{идентификатор_бронирования}"), Кнопка встроенной клавиатуры(текст="❌ Отмена", обратные_данные=f"admin_cancel_{идентификатор_бронирования}")]])
-    клиентская_ссылка = ф"https://t.me/{raw_имя пользователя}" если raw_имя пользователя!= "без_юзернейма" еще f"tg://пользователь?идентификатор={идентификатор_пользователя}"
-    ждать бот.отправить_сообщение(chat_id=MY_ID, текст=f"🚨 <b>НОВЫЙ ЗАКАЗ!</b>\n\n📦 <b>Товар:</b> {p_имя}\n👤 <b>Покупать:</b> @{raw_имя пользователя}\n\n🔗 <a href='{клиент_ссылка}'>НАПИСАТЬ КЛИЕНТУ</a>", reply_markup=клавиатура_администратора, режим_анализа="HTML")
+@dp.callback_query(F.data.startswith("buy_"))
+async def handle_purchase(callback: CallbackQuery):
+    product_id = callback.data.split("_")[1]
+    user_id = callback.from_user.id
+    raw_username = callback.from_user.username or "без_юзернейма"
+    conn = sqlite3.connect("shop_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, price, quantity FROM products WHERE id = ?", (product_id,))
+    product = cursor.fetchone()
+    if not product or product[2] <= 0:
+        await callback.answer("Извини, товар уже закончился! 😢", show_alert=True)
+        conn.close(); return
+    p_name, p_price, _ = product
+    cursor.execute("UPDATE products SET quantity = quantity - 1 WHERE id = ?", (product_id,))
+    cursor.execute("INSERT INTO bookings (user_id, username, product_id) VALUES (?, ?, ?)", (user_id, raw_username, product_id))
+    conn.commit(); booking_id = cursor.lastrowid; conn.close()
+    await callback.message.answer(f"✅ <b>Забронировано:</b> {hd.quote(p_name)} ({p_price}₽).", parse_mode="HTML")
+    await callback.answer()
+    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Продано", callback_data=f"admin_sold_{booking_id}"), InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_cancel_{booking_id}")]])
+    client_link = f"https://t.me/{raw_username}" if raw_username != "без_юзернейма" else f"tg://user?id={user_id}"
+    await bot.send_message(chat_id=MY_ID, text=f"🚨 <b>НОВЫЙ ЗАКАЗ!</b>\n\n📦 <b>Товар:</b> {p_name}\n👤 <b>Покупатель:</b> @{raw_username}\n\n🔗 <a href='{client_link}'>НАПИСАТЬ КЛИЕНТУ</a>", reply_markup=admin_keyboard, parse_mode="HTML")
 
 # --- ЗАПУСК ---
-асинхронный деф основной():
+async def main():
     load_reminders()
-    планировщик.начинать()
-    печать("Робот запущен! Админ-меню на кнопках готово.")
-    ждать дп.старт_опроса(бот)
+    scheduler.start()
+    print("Робот запущен! Админ-меню на кнопках готово.")
+    await dp.start_polling(bot)
 
-если __имя__ == "__основной__":
-    асинсио.бегать(основной())
+if __name__ == "__main__":
+    asyncio.run(main())
