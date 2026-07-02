@@ -83,7 +83,7 @@ async def user_tracking_callback_middleware(handler, event: CallbackQuery, data:
         
     return await handler(event, data)
 
-# --- ИСПРАВЛЕННАЯ ФУНКЦИЯ ПАРСЕРА НАЛИЧИЯ ---
+# --- УМНАЯ ФУНКЦИЯ ПАРСЕРА НАЛИЧИЯ (ГРУППИРОВКА ПО БЛОКАМ ЦЕН) ---
 def parse_inventory(text: str) -> list:
     lines = text.split('\n')
     price_regex = re.compile(r'(?:Цена|Стоимость)\s*:\s*(\d+)\s*(?:руб|р)?', re.IGNORECASE)
@@ -97,7 +97,7 @@ def parse_inventory(text: str) -> list:
         if not line:
             continue
             
-        # Определение категории по эмодзи или ключевым словам
+        # Определение категории по ключевым эмодзи
         if "💧" in line or "Жидкости" in line:
             current_cat = "liquids"
             temp_items_for_price = []
@@ -124,14 +124,14 @@ def parse_inventory(text: str) -> list:
         price_match = price_regex.search(line)
         if price_match:
             current_price = int(price_match.group(1))
-            # Присваиваем эту цену всем накопленным выше товарам, у которых еще нет цены
+            # Присваиваем эту цену всем накопленным товарам в текущем блоке
             for t_item in temp_items_for_price:
                 t_item["price"] = current_price
                 items.append(t_item)
-            temp_items_for_price = [] # Очищаем буфер для следующего блока цен
+            temp_items_for_price = [] # Сбрасываем временный буфер для следующего блока цен
             continue
             
-        # Если строка — это товар
+        # Если строка — это позиция товара
         if line.startswith("✅"):
             clean_line = line.replace("✅", "").strip()
             count = 1
@@ -162,18 +162,18 @@ def parse_inventory(text: str) -> list:
                 "category": current_cat,
                 "brand": brand,
                 "name": name,
-                "price": None, # Установим, когда дойдем до строчки с ценой
+                "price": None, 
                 "count": count
             })
             
-    # На случай, если админ забыл написать цену в самом конце категории
+    # Защита на случай, если цену в конце забыли указать
     for t_item in temp_items_for_price:
         t_item["price"] = 0
         items.append(t_item)
         
     return items
 
-# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ---
+# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ (ИСПРАВЛЕНО СОЗДАНИЕ ТАБЛИЦ) ---
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -198,6 +198,16 @@ def init_db():
             is_banned INTEGER DEFAULT 0
         )
     ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cart (
+            user_id INTEGER,
+            product_id INTEGER,
+            quantity INTEGER,
+            PRIMARY KEY (user_id, product_id)
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -291,8 +301,6 @@ async def process_new_inventory(message: Message, state: FSMContext):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('DELETE FROM products')
-    
-    # Очищаем корзины, так как ID товаров полностью меняются
     cursor.execute('DELETE FROM cart')
     
     for item in parsed_items:
@@ -307,7 +315,7 @@ async def process_new_inventory(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(f"✅ Успешно добавлено товаров: {len(parsed_items)} шт. Витрина обновлена!")
 
-# --- ИСПРАВЛЕННЫЙ КРАСИВЫЙ ВЫВОД ОСТАТКОВ ПО ЦЕНОВЫМ БЛОКАМ ---
+# --- КРАСИВЫЙ СГРУППИРОВАННЫЙ ВЫВОД ТЕКСТА ОСТАТКОВ ---
 @dp.callback_query(F.data == "admin_stock")
 async def send_current_stock_as_text(callback: CallbackQuery):
     if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
@@ -325,14 +333,13 @@ async def send_current_stock_as_text(callback: CallbackQuery):
     output_text = "❗️ZKVR SHOP❗️\n"
     
     for cat_key, cat_name in categories.items():
-        # Сначала проверяем, есть ли вообще товары в этой категории
         cursor.execute('SELECT COUNT(*) FROM products WHERE category = ? AND count > 0', (cat_key,))
         if cursor.fetchone()[0] == 0:
             continue
             
         output_text += f"\n{cat_name}\n"
         
-        # Получаем уникальные цены для текущей категории в том порядке, в котором они заносились (по ID)
+        # Получаем уникальные цены строго в хронологическом порядке добавления
         cursor.execute('''
             SELECT price FROM products 
             WHERE category = ? AND count > 0 
@@ -343,7 +350,7 @@ async def send_current_stock_as_text(callback: CallbackQuery):
         
         for p_row in prices:
             price = p_row[0]
-            # Вытаскиваем товары конкретно этой категории и этой цены в порядке их добавления
+            # Вытягиваем товары внутри ценового блока
             cursor.execute('''
                 SELECT brand, name, count FROM products 
                 WHERE category = ? AND price = ? AND count > 0 
@@ -365,7 +372,6 @@ async def send_current_stock_as_text(callback: CallbackQuery):
     output_text += "\nПо покупке писать: @PornHub_Tag\nСсылка для друга: https://t.me/+VTJW9uNAfTZmYmQy"
     conn.close()
     
-    # Если текст слишком большой, разбиваем на части
     if len(output_text) > 4000:
         for i in range(0, len(output_text), 4000):
             await callback.message.answer(output_text[i:i+4000])
@@ -712,7 +718,7 @@ async def delete_item_from_cart(callback: CallbackQuery):
 @dp.callback_query(F.data == "clear_cart")
 async def clear_cart(callback: CallbackQuery):
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    cursor = cursor = conn.cursor()
     cursor.execute('DELETE FROM cart WHERE user_id = ?', (callback.from_user.id,))
     conn.commit()
     conn.close()
