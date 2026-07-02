@@ -3,6 +3,7 @@ import logging
 import sqlite3
 import os
 import re
+from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
@@ -24,6 +25,66 @@ DB_PATH = os.path.join(BASE_DIR, 'shop.db')
 class ShopStates(StatesGroup):
     waiting_for_age = State()
     waiting_for_inventory = State()
+    waiting_for_ban_id = State()
+    waiting_for_unban_id = State()
+
+# --- МИДЛВАРЬ ДЛЯ ПРОВЕРКИ БАНА И СБОРА ЮЗЕРОВ ---
+@dp.message.outer_middleware()
+async def user_tracking_middleware(handler, event: Message, data: dict):
+    user = event.from_user
+    if not user:
+        return await handler(event, data)
+        
+    username = f"@{user.username}" if user.username else "Нет юзернейма"
+    full_name = user.full_name
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Проверяем, существует ли юзер
+    cursor.execute('SELECT is_banned FROM users WHERE user_id = ?', (user.id,))
+    res = cursor.fetchone()
+    
+    if res is None:
+        # Если новый пользователь — сохраняем со всеми данными
+        cursor.execute('''
+            INSERT INTO users (user_id, username, full_name, created_at, is_adult, is_banned)
+            VALUES (?, ?, ?, ?, 0, 0)
+        ''', (user.id, username, full_name, now_str))
+        conn.commit()
+        is_banned = 0
+    else:
+        is_banned = res[0]
+        # Обновляем юзернейм и имя на случай, если пользователь их изменил
+        cursor.execute('UPDATE users SET username = ?, full_name = ? WHERE user_id = ?', (username, full_name, user.id))
+        conn.commit()
+        
+    conn.close()
+    
+    if is_banned == 1 and int(user.id) != int(str(ADMIN_ID).strip()):
+        await event.answer("🚫 <b>Доступ заблокирован.</b> Вы были забанены администратором.", parse_mode="HTML")
+        return # Останавливаем обработку, код дальше не идет
+        
+    return await handler(event, data)
+
+@dp.callback_query.outer_middleware()
+async def user_tracking_callback_middleware(handler, event: CallbackQuery, data: dict):
+    user = event.from_user
+    if not user:
+        return await handler(event, data)
+        
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT is_banned FROM users WHERE user_id = ?', (user.id,))
+    res = cursor.fetchone()
+    conn.close()
+    
+    if res and res[0] == 1 and int(user.id) != int(str(ADMIN_ID).strip()):
+        await event.answer("🚫 Вы забанены!", show_alert=True)
+        return
+        
+    return await handler(event, data)
 
 # --- ФУНКЦИЯ ПАРСЕРА НАЛИЧИЯ ---
 def parse_inventory(text: str) -> list:
@@ -139,12 +200,31 @@ def init_db():
             count INTEGER
         )
     ''')
+    
+    # Обновляем таблицу пользователей с поддержкой сбора статистики и банов
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
-            is_adult INTEGER DEFAULT 0
+            username TEXT,
+            full_name TEXT,
+            created_at TEXT,
+            is_adult INTEGER DEFAULT 0,
+            is_banned INTEGER DEFAULT 0
         )
     ''')
+    
+    # Миграция старых БД (добавление колонок, если их не было)
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if "username" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN username TEXT")
+    if "full_name" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN full_name TEXT")
+    if "created_at" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN created_at TEXT")
+    if "is_banned" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS cart (
             user_id INTEGER,
@@ -170,7 +250,7 @@ def check_user_adult(user_id):
 def set_user_adult(user_id):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('INSERT OR REPLACE INTO users (user_id, is_adult) VALUES (?, 1)', (user_id,))
+    cursor.execute('UPDATE users SET is_adult = 1 WHERE user_id = ?', (user_id,))
     conn.commit()
     conn.close()
 
@@ -181,6 +261,15 @@ def get_main_menu_kb():
         [InlineKeyboardButton(text="⚙️ Расходники", callback_data="showcat_consumables")],
         [InlineKeyboardButton(text="⚠️ Снюс", callback_data="showcat_snus")],
         [InlineKeyboardButton(text="🛒 Корзина", callback_data="view_cart")]
+    ])
+
+def get_admin_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Обновить наличие (Текст)", callback_data="admin_update")],
+        [InlineKeyboardButton(text="📋 Посмотреть остатки", callback_data="admin_stock")],
+        [InlineKeyboardButton(text="📉 Списать товар (-1 шт)", callback_data="admin_decrease_select_cat")],
+        [InlineKeyboardButton(text="👥 Список пользователей", callback_data="admin_users_list")],
+        [InlineKeyboardButton(text="🚫 Управление баном", callback_data="admin_ban_menu")]
     ])
 
 # --- ХЕНДЛЕРЫ СТАРТА И ПРОВЕРКИ ВОЗРАСТА ---
@@ -211,12 +300,13 @@ async def age_denied(callback: CallbackQuery):
 @dp.message(Command("admin"))
 async def admin_panel(message: Message):
     if int(message.from_user.id) != int(str(ADMIN_ID).strip()): return
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Обновить наличие (Текст)", callback_data="admin_update")],
-        [InlineKeyboardButton(text="📋 Посмотреть остатки", callback_data="admin_stock")],
-        [InlineKeyboardButton(text="📉 Списать товар (-1 шт)", callback_data="admin_decrease_select_cat")]
-    ])
-    await message.answer("⚙️ Панель администратора ZKVR SHOP:", reply_markup=kb)
+    await message.answer("⚙️ Панель администратора ZKVR SHOP:", reply_markup=get_admin_kb())
+
+@dp.callback_query(F.data == "back_to_admin_panel")
+async def back_to_admin_panel_handler(callback: CallbackQuery, state: FSMContext):
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
+    await state.clear()
+    await callback.message.edit_text("⚙️ Панель администратора ZKVR SHOP:", reply_markup=get_admin_kb())
 
 @dp.callback_query(F.data == "admin_update")
 async def ask_for_inventory(callback: CallbackQuery, state: FSMContext):
@@ -292,6 +382,119 @@ async def send_current_stock_as_text(callback: CallbackQuery):
     
     await callback.message.answer(output_text)
     await callback.answer()
+
+# --- ФУНКЦИИ ПРОСМОТРА ПОЛЬЗОВАТЕЛЕЙ И БАНОВ ---
+@dp.callback_query(F.data == "admin_users_list")
+async def admin_users_list(callback: CallbackQuery):
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT user_id, username, full_name, created_at, is_banned FROM users ORDER BY created_at DESC')
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        await callback.answer("Пользователей пока нет.", show_alert=True)
+        return
+        
+    text = f"👥 <b>База пользователей бота (Всего: {len(rows)}):</b>\n\n"
+    for row in rows:
+        u_id, username, full_name, created_at, is_banned = row
+        ban_status = " 🚫 [ЗАБАНЕН]" if is_banned == 1 else ""
+        date_formatted = created_at if created_at else "Нет даты"
+        text += f"👤 <b>{full_name}</b> ({username}){ban_status}\n🆔 ID: <code>{u_id}</code>\n📅 Вход: {date_formatted}\n\n"
+        
+    kb = InlineKeyboardMarkup(inline_keyboard=[[[InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")]]])
+    
+    # Если текст огромный (больше 4000 символов), разбиваем его на части
+    if len(text) > 4000:
+        for i in range(0, len(text), 4000):
+            await callback.message.answer(text[i:i+4000], parse_mode="HTML")
+        await callback.message.answer("Выше выведен весь список.", reply_markup=kb)
+    else:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+@dp.callback_query(F.data == "admin_ban_menu")
+async def admin_ban_menu(callback: CallbackQuery):
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚫 Забанить по ID", callback_data="ban_user_action")],
+        [InlineKeyboardButton(text="🟢 Разбанить по ID", callback_data="unban_user_action")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_admin_panel")]
+    ])
+    await callback.message.edit_text("🛠 <b>Управление блокировками:</b>", reply_markup=kb, parse_mode="HTML")
+
+@dp.callback_query(F.data == "ban_user_action")
+async def ask_ban_id(callback: CallbackQuery, state: FSMContext):
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
+    await callback.message.answer("✏️ Введите Telegram ID пользователя, которого хотите <b>ЗАБАНИТЬ</b>:", parse_mode="HTML")
+    await state.set_state(ShopStates.waiting_for_ban_id)
+    await callback.answer()
+
+@dp.message(ShopStates.waiting_for_ban_id)
+async def process_ban_id(message: Message, state: FSMContext):
+    if int(message.from_user.id) != int(str(ADMIN_ID).strip()): return
+    target_id = message.text.strip()
+    
+    if not target_id.isdigit():
+        await message.answer("❌ ID должен состоять только из цифр. Попробуйте еще раз.")
+        return
+        
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT username, full_name FROM users WHERE user_id = ?', (int(target_id),))
+    user_found = cursor.fetchone()
+    
+    if not user_found:
+        await message.answer("❌ Пользователь с таким ID не найден в базе данных.")
+        conn.close()
+        await state.clear()
+        return
+        
+    cursor.execute('UPDATE users SET is_banned = 1 WHERE user_id = ?', (int(target_id),))
+    conn.commit()
+    conn.close()
+    
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[[InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")]]])
+    await message.answer(f"🚫 Пользователь <b>{user_found[1]}</b> ({user_found[0]}) с ID <code>{target_id}</code> успешно <b>ЗАБАНЕН</b>!", reply_markup=kb, parse_mode="HTML")
+
+@dp.callback_query(F.data == "unban_user_action")
+async def ask_unban_id(callback: CallbackQuery, state: FSMContext):
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
+    await callback.message.answer("✏️ Введите Telegram ID пользователя, которого хотите <b>РАЗБАНИТЬ</b>:", parse_mode="HTML")
+    await state.set_state(ShopStates.waiting_for_unban_id)
+    await callback.answer()
+
+@dp.message(ShopStates.waiting_for_unban_id)
+async def process_unban_id(message: Message, state: FSMContext):
+    if int(message.from_user.id) != int(str(ADMIN_ID).strip()): return
+    target_id = message.text.strip()
+    
+    if not target_id.isdigit():
+        await message.answer("❌ ID должен состоять только из цифр. Попробуйте еще раз.")
+        return
+        
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT username, full_name FROM users WHERE user_id = ?', (int(target_id),))
+    user_found = cursor.fetchone()
+    
+    if not user_found:
+        await message.answer("❌ Пользователь с таким ID не найден в базе данных.")
+        conn.close()
+        await state.clear()
+        return
+        
+    cursor.execute('UPDATE users SET is_banned = 0 WHERE user_id = ?', (int(target_id),))
+    conn.commit()
+    conn.close()
+    
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[[InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")]]])
+    await message.answer(f"🟢 Пользователь <b>{user_found[1]}</b> ({user_found[0]}) с ID <code>{target_id}</code> успешно <b>РАЗБАНИТЬ</b>!", reply_markup=kb, parse_mode="HTML")
+
 
 # --- ЛОГИКА РУЧНОГО СПИСАНИЯ ДЛЯ АДМИНА ---
 @dp.callback_query(F.data == "admin_decrease_select_cat")
@@ -373,15 +576,6 @@ async def admin_dec_execute(callback: CallbackQuery):
         
         await callback.message.edit_text(f"Успешно убрали 1 шт <b>{brand} — {name}</b>.\nМожно списать что-то еще из этой линейки:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
     conn.close()
-
-@dp.callback_query(F.data == "back_to_admin_panel")
-async def back_to_admin_panel_handler(callback: CallbackQuery):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Обновить наличие (Текст)", callback_data="admin_update")],
-        [InlineKeyboardButton(text="📋 Посмотреть остатки", callback_data="admin_stock")],
-        [InlineKeyboardButton(text="📉 Списать товар (-1 шт)", callback_data="admin_decrease_select_cat")]
-    ])
-    await callback.message.edit_text("⚙️ Панель администратора ZKVR SHOP:", reply_markup=kb)
 
 # --- КАТАЛОГ ДЛЯ КЛИЕНТОВ ---
 @dp.callback_query(F.data.startswith("showcat_"))
@@ -570,7 +764,6 @@ async def checkout_cart(callback: CallbackQuery):
     client_text = f"🎉 <b>Бронь успешно оформлена!</b>\n\n📦 <b>Ваш заказ:</b>\n"
     total_price = 0
     
-    # Собираем данные для кнопки отмены (id_товара:кол-во)
     cancel_data_list = []
     
     for item in cart_items:
@@ -586,16 +779,14 @@ async def checkout_cart(callback: CallbackQuery):
         new_stock = max(0, stock - quantity)
         cursor.execute('UPDATE products SET count = ? WHERE id = ?', (new_stock, p_id))
         
-    order_text += f"\n💰 <b>Итого к оплате:</b> {total_price} руб."
+    order_text += f"\n💰 <b>Итого к оплате:</b> {total_price} text руб."
     client_text += f"\n💰 <b>Итого к оплате:</b> {total_price} руб.\n\n⚠️ Бронь держится 24 часа. Ждем вас в магазине!"
     
     cursor.execute('DELETE FROM cart WHERE user_id = ?', (user_id,))
     conn.commit()
     conn.close()
     
-    # Генерируем сжатую строку отмены для callback_data (ограничение Telegram 64 байта)
-    # Формат: cancelord_юзерID_p1:q1-p2:q2
-    items_encoded = "-".join(cancel_data_list)[:35] # обрезка на случай гигантских заказов
+    items_encoded = "-".join(cancel_data_list)[:35]
     admin_callback = f"cancelord_{user_id}_{items_encoded}"
     
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -618,7 +809,6 @@ async def checkout_cart(callback: CallbackQuery):
 async def admin_cancel_order(callback: CallbackQuery):
     if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
     
-    # Разбираем callback: cancelord_юзерID_p1:q1-p2:q2
     parts = callback.data.split("_")
     client_id = int(parts[1])
     encoded_items = parts[2]
@@ -626,7 +816,6 @@ async def admin_cancel_order(callback: CallbackQuery):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Возвращаем товары обратно на склад
     item_blocks = encoded_items.split("-")
     for block in item_blocks:
         if ":" in block:
@@ -636,7 +825,6 @@ async def admin_cancel_order(callback: CallbackQuery):
     conn.commit()
     conn.close()
     
-    # Уведомляем клиента об отмене
     try:
         await bot.send_message(
             chat_id=client_id, 
@@ -644,9 +832,8 @@ async def admin_cancel_order(callback: CallbackQuery):
             parse_mode="HTML"
         )
     except Exception:
-        pass # Если пользователь заблокировал бота
+        pass
         
-    # Обновляем текст сообщения у админа, убирая кнопку
     updated_text = callback.message.text + "\n\n❌ <b>БРОНЬ ОТМЕНЕНА АДМИНИСТРАТОРОМ</b>"
     await callback.message.edit_text(updated_text, reply_markup=None, parse_mode="HTML")
     await callback.answer("Бронь успешно отменена, товары возвращены на склад!", show_alert=True)
