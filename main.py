@@ -1,89 +1,89 @@
-импорт асинкио
-импорт ведение журнала
-импорт sqlite3
-импорт ос
-импорт повторно
-от айограмма импорт Бот, Диспетчер, Ф
-от айограмма.типы импорт Сообщение, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-от айограммы.фильтры импорт Команда
-от айограммы.фсм.контекст импорт ФСМКонтекст
-от айограммы.фсм.состояние импорт Государство, Группа государств
+import asyncio
+import logging
+import sqlite3
+import os
+import re
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
-ведение журнала.basicConfig(уровень=ведение журнала.ИНФОРМАЦИЯ)
+logging.basicConfig(level=logging.INFO)
 
 # !!! ОБЯЗАТЕЛЬНО ВСТАВЬ СВОИ ДАННЫЕ !!!
 BOT_TOKEN = "8940239980:AAH1u8qqQo9MtSpv4KHLlRcr6ckm3s3_ZQI"
-ADMIN_ID = 8344626747  # Твой идентификатор Telegram (Укажи свой цифры)
+ADMIN_ID = 8344626747  # Твой Telegram ID (Укажи свои цифры)
 
-бот = Бот(токен=BOT_TOKEN)
-дп = Диспетчер()
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
 
-BASE_DIR = ос.путь.имя каталога(ос.путь.абспат(__файл__))
-DB_PATH = ос.путь.присоединиться(БАЗОВЫЙ_КАТАЛОГ, 'shop.db')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'shop.db')
 
-класс ShopStates(Группа государств):
-    ожидание_возраста_= Состояние()
-    ожидание_инвентаря_ = Состояние()
+class ShopStates(StatesGroup):
+    waiting_for_age = State()
+    waiting_for_inventory = State()
 
 # --- ФУНКЦИЯ ПАРСЕРА НАЛИЧИЯ ---
-деф parse_инвентарь(текст: стр) -> список:
-    строки = текст.расколоть('\н')
-    price_regex = re.компилировать(r'(?:Цена|Стоимость)\s*:\s*(\d+)\s*(?:руб|р)?', повторно.ИГНОРИРОВАТЬ СЛУЧАЙ)
+def parse_inventory(text: str) -> list:
+    lines = text.split('\n')
+    price_regex = re.compile(r'(?:Цена|Стоимость)\s*:\s*(\d+)\s*(?:руб|р)?', re.IGNORECASE)
     
-    блоки = []
-    текущий_блок = {"категория": Нет, "линии": []}
+    blocks = []
+    current_block = {"category": None, "lines": []}
     
-    для линия в линии:
-        линия = линия.полоска()
-        если нет линия:
-            продолжать
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
             
-        если "💧" в линия или "Жидкости" в линия:
-            если текущий_блок["линии"]: блоки.добавить(текущий_блок)
-            текущий_блок = {"категория": "жидкости", "линии": []}
-            продолжать
-        Элиф "🔌" в линия или "Под-системы" в линия:
-            если текущий_блок["линии"]: блоки.добавить(текущий_блок)
-            текущий_блок = {"категория": "стручки", "линии": []}
-            продолжать
-        Элиф "⚙️" в линия или "Расходники" в линия или "Испарители" в линия:
-            если текущий_блок["линии"]: блоки.добавить(текущий_блок)
-            текущий_блок = {"категория": "расходные материалы", "линии": []}
-            продолжать
-        Элиф "⚠️" в линия или "Снюс" в линия:
-            если текущий_блок["линии"]: блоки.добавить(текущий_блок)
-            текущий_блок = {"категория": "снюс", "линии": []}
-            продолжать
-        Элиф "❗️" в линия или "По покупке" в линия или "Ссылка" в линия:
-            продолжать
+        if "💧" in line or "Жидкости" in line:
+            if current_block["lines"]: blocks.append(current_block)
+            current_block = {"category": "liquids", "lines": []}
+            continue
+        elif "🔌" in line or "Под-системы" in line:
+            if current_block["lines"]: blocks.append(current_block)
+            current_block = {"category": "pods", "lines": []}
+            continue
+        elif "⚙️" in line or "Расходники" in line or "Испарители" in line:
+            if current_block["lines"]: blocks.append(current_block)
+            current_block = {"category": "consumables", "lines": []}
+            continue
+        elif "⚠️" in line or "Снюс" in line:
+            if current_block["lines"]: blocks.append(current_block)
+            current_block = {"category": "snus", "lines": []}
+            continue
+        elif "❗️" in line or "По покупке" in line or "Ссылка" in line:
+            continue
             
-        если текущий_блок["категория"]:
-            текущий_блок["линии"].добавить(линия)
+        if current_block["category"]:
+            current_block["lines"].append(line)
             
-    если текущий_блок["линии"]:
-        блоки.добавить(текущий_блок)
+    if current_block["lines"]:
+        blocks.append(current_block)
 
-    элементы = []
-    для блокировать в блоки:
-        кот = блок["категория"]
-        block_lines = блок["линии"]
+    items = []
+    for block in blocks:
+        cat = block["category"]
+        block_lines = block["lines"]
         temp_items = []
-        локальная_цена = Нет
+        local_price = None
         
-        для линия в block_lines:
-            price_match = price_regex.search(строка)
-            если цена_соответствует:
+        for line in block_lines:
+            price_match = price_regex.search(line)
+            if price_match:
                 local_price = int(price_match.group(1))
-                для t_item в temp_items:
-                    эсли t_item["цена"] отсуствют:
-                        t_item["цена"] = локальная_цена
-                продолжать
+                for t_item in temp_items:
+                    if t_item["price"] is None:
+                        t_item["price"] = local_price
+                continue
                 
-            эсли строка.startswith("✅"):
+            if line.startswith("✅"):
                 clean_line = line.replace("✅", "").strip()
-                количество = 1
+                count = 1
                 count_match = re.search(r'—\s*(\d+)\s*шт', clean_line)
-                эсли count_match:
+                if count_match:
                     count = int(count_match.group(1))
                     clean_line = re.sub(r'—\s*\d+\s*шт\.?', '', clean_line).strip()
                 
@@ -547,66 +547,66 @@ async def checkout_cart(callback: CallbackQuery):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
-        ВЫБЕРИТЕ стр.идентификатор, п.бренд, п.имя, п.цена, с.количество, п.считать 
-        ИЗ корзины с 
-        ПРИСОЕДИНЕНИЕ к придоктаму п ОН в.идентификатор_продукта = п.идентификатор 
-        ГДЕ в.идентификатор_пользователя = ?
+        SELECT p.id, p.brand, p.name, p.price, c.quantity, p.count 
+        FROM cart c 
+        JOIN products p ON c.product_id = p.id 
+        WHERE c.user_id = ?
     ''', (user_id,))
     cart_items = cursor.fetchall()
     
-    если не cart_items:
-        await callback.answer("Корзина страница!", show_alert=True)
+    if not cart_items:
+        await callback.answer("Корзина пуста!", show_alert=True)
         conn.close()
-        возвращаться
+        return
         
-    для товара в cart_items:
-        p_id, бренд, название, цена, количество, запас = товар
-        если запас < количество:
-            await callback.answer(f"Ошибка! {имя} сталось все {stock} шт.", show_alert=True)
+    for item in cart_items:
+        p_id, brand, name, price, quantity, stock = item
+        if stock < quantity:
+            await callback.answer(f"Ошибка! {name} осталось всего {stock} шт.", show_alert=True)
             conn.close()
-            возвращаться
+            return
             
-    order_text = f"🚨 **Новая информация!**\n\n👤 **Клиент:** {user.full_name} ({имя пользователя})\n🆔 ID: `{user.id}`\n\n📦 **Состав заказ:**\n"
+    order_text = f"🚨 **Новая бронь!**\n\n👤 **Клиент:** {user.full_name} ({username})\n🆔 ID: `{user.id}`\n\n📦 **Состав заказа:**\n"
     client_text = f"🎉 **Бронь успешно оформлена!**\n\n📦 **Ваш заказ:**\n"
-    общая_цена = 0
+    total_price = 0
     
-    для товара в cart_items:
-        p_id, бренд, название, цена, количество, запас = товар
-        стоимость = цена * количество
-        общая_цена += стоимость
-        item_line = f"• {бренд} — {название} ({количество} шт.) — {стоимость}₽\n"
-        текст_заказа += строка_элемента
-        текст_клиента += строка_элемента
+    for item in cart_items:
+        p_id, brand, name, price, quantity, stock = item
+        cost = price * quantity
+        total_price += cost
+        item_line = f"• {brand} — {name} ({quantity} шт.) — {cost}₽\n"
+        order_text += item_line
+        client_text += item_line
         
-        new_stock = max(0, запас - соличество)
-        cursor.execute('ОБНОВЛЕНИЕ приложений SET count = ? ГДЕ id = ?', (new_stock, p_id))
+        new_stock = max(0, stock - quantity)
+        cursor.execute('UPDATE products SET count = ? WHERE id = ?', (new_stock, p_id))
         
     order_text += f"\n💰 **Итого к оплате:** {total_price} руб."
     client_text += f"\n💰 **Итого к оплате:** {total_price} руб.\n\n⚠️ Бронь держится 24 часа. Ждем вас в магазине!"
     
-    cursor.execute('УДАЛИТЬ ИЗ корзины, ГДЕ user_id = ?', (user_id,))
+    cursor.execute('DELETE FROM cart WHERE user_id = ?', (user_id,))
     conn.commit()
     conn.close()
     
-    попробуйте:
+    try:
         target_admin = int(str(ADMIN_ID).strip())
-        ждать bot.send_message(chat_id=target_admin, text=order_text, parse_mode= "Markdown")
-        logging.info(f"Уведомление о заказе учётного управления {target_admin}")
-    за исключением исключения как е:
-        logging.error(f" КРИТИЧЕСКАЯ ОФИБКА ОТПРАВКИ АДМИНУ: {e}")
+        await bot.send_message(chat_id=target_admin, text=order_text, parse_mode="Markdown")
+        logging.info(f"Уведомление о заказе успешно отправлено админу {target_admin}")
+    except Exception as e:
+        logging.error(f" КРИТИЧЕСКАЯ ОШИБКА ОТПРАВКИ АДМИНУ: {e}")
         
     kb = InlineKeyboardMarkup(inline_keyboard=[[[InlineKeyboardButton(text="🔄 В меню", callback_data="back_to_main")]]])
-    получить электронное сообщение.message.edit_text(client_text, reply_markup=kb, parse_mode= "Markdown")
+    await callback.message.edit_text(client_text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer("Успешно забронировано!", show_alert=True)
 
 @dp.callback_query(F.data == "back_to_main")
-асинхронное приложение back_to_main_handler(обратный вход: CallbackQuery):
-    await callback.message.edit_text("👋 Выберете категорию товара:", reply_markup=get_main_menu_kb())
-    ждать обратного выzова.answer()
+async def back_to_main_handler(callback: CallbackQuery):
+    await callback.message.edit_text("👋 Выберите категорию товара:", reply_markup=get_main_menu_kb())
+    await callback.answer()
 
-асинхроннѾѵ определьение main():
-    ждать bot.delete_webhook(drop_pending_updates=True)
-    ждать dp.start_polling(бот)
+async def main():
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
 
-эсли __name__ == "__main__":
-    asyncio.runosnovnoy() conn.commit())
+if __name__ == "__main__":
+    asyncio.run(main())
