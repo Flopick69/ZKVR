@@ -1,90 +1,89 @@
-import asyncio
-import logging
-import sqlite3
-import os
-import re
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+импорт асинкио
+импорт ведение журнала
+импорт sqlite3
+импорт ос
+импорт повторно
+от айограмма импорт Бот, Диспетчер, Ф
+от айограмма.типы импорт Сообщение, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+от айограммы.фильтры импорт Команда
+от айограммы.фсм.контекст импорт ФСМКонтекст
+от айограммы.фсм.состояние импорт Государство, Группа государств
 
-logging.basicConfig(level=logging.INFO)
+ведение журнала.basicConfig(уровень=ведение журнала.ИНФОРМАЦИЯ)
 
 # !!! ОБЯЗАТЕЛЬНО ВСТАВЬ СВОИ ДАННЫЕ !!!
 BOT_TOKEN = "8940239980:AAH1u8qqQo9MtSpv4KHLlRcr6ckm3s3_ZQI"
-ADMIN_ID = 8344626747  # Твой Telegram ID
+ADMIN_ID = 8344626747  # Твой идентификатор Telegram (Укажи свой цифры)
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+бот = Бот(токен=BOT_TOKEN)
+дп = Диспетчер()
 
-# --- ПУТЬ К БАЗЕ ДАННЫХ ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'shop.db')
+BASE_DIR = ос.путь.имя каталога(ос.путь.абспат(__файл__))
+DB_PATH = ос.путь.присоединиться(БАЗОВЫЙ_КАТАЛОГ, 'shop.db')
 
-class ShopStates(StatesGroup):
-    waiting_for_age = State()
-    waiting_for_inventory = State()
+класс ShopStates(Группа государств):
+    ожидание_возраста_= Состояние()
+    ожидание_инвентаря_ = Состояние()
 
-# --- ФУНКЦИЯ ПАРСЕРА НАЛИЧИЯ (ТЕПЕРЬ ТУТ) ---
-def parse_inventory(text: str) -> list:
-    lines = text.split('\n')
-    price_regex = re.compile(r'(?:Цена|Стоимость)\s*:\s*(\d+)\s*(?:руб|р)?', re.IGNORECASE)
+# --- ФУНКЦИЯ ПАРСЕРА НАЛИЧИЯ ---
+деф parse_инвентарь(текст: стр) -> список:
+    строки = текст.расколоть('\н')
+    price_regex = re.компилировать(r'(?:Цена|Стоимость)\s*:\s*(\d+)\s*(?:руб|р)?', повторно.ИГНОРИРОВАТЬ СЛУЧАЙ)
     
-    blocks = []
-    current_block = {"category": None, "lines": []}
+    блоки = []
+    текущий_блок = {"категория": Нет, "линии": []}
     
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
+    для линия в линии:
+        линия = линия.полоска()
+        если нет линия:
+            продолжать
             
-        if "💧" in line or "Жидкости" in line:
-            if current_block["lines"]: blocks.append(current_block)
-            current_block = {"category": "liquids", "lines": []}
-            continue
-        elif "🔌" in line or "Под-системы" in line:
-            if current_block["lines"]: blocks.append(current_block)
-            current_block = {"category": "pods", "lines": []}
-            continue
-        elif "⚙️" in line or "Расходники" in line or "Испарители" in line:
-            if current_block["lines"]: blocks.append(current_block)
-            current_block = {"category": "consumables", "lines": []}
-            continue
-        elif "⚠️" in line or "Снюс" in line:
-            if current_block["lines"]: blocks.append(current_block)
-            current_block = {"category": "snus", "lines": []}
-            continue
-        elif "❗️" in line or "По покупке" in line or "Ссылка" in line:
-            continue
+        если "💧" в линия или "Жидкости" в линия:
+            если текущий_блок["линии"]: блоки.добавить(текущий_блок)
+            текущий_блок = {"категория": "жидкости", "линии": []}
+            продолжать
+        Элиф "🔌" в линия или "Под-системы" в линия:
+            если текущий_блок["линии"]: блоки.добавить(текущий_блок)
+            текущий_блок = {"категория": "стручки", "линии": []}
+            продолжать
+        Элиф "⚙️" в линия или "Расходники" в линия или "Испарители" в линия:
+            если текущий_блок["линии"]: блоки.добавить(текущий_блок)
+            текущий_блок = {"категория": "расходные материалы", "линии": []}
+            продолжать
+        Элиф "⚠️" в линия или "Снюс" в линия:
+            если текущий_блок["линии"]: блоки.добавить(текущий_блок)
+            текущий_блок = {"категория": "снюс", "линии": []}
+            продолжать
+        Элиф "❗️" в линия или "По покупке" в линия или "Ссылка" в линия:
+            продолжать
             
-        if current_block["category"]:
-            current_block["lines"].append(line)
+        если текущий_блок["категория"]:
+            текущий_блок["линии"].добавить(линия)
             
-    if current_block["lines"]:
-        blocks.append(current_block)
+    если текущий_блок["линии"]:
+        блоки.добавить(текущий_блок)
 
-    items = []
-    for block in blocks:
-        cat = block["category"]
-        block_lines = block["lines"]
+    элементы = []
+    для блокировать в блоки:
+        кот = блок["категория"]
+        block_lines = блок["линии"]
         temp_items = []
-        local_price = None
+        локальная_цена = Нет
         
-        for line in block_lines:
-            price_match = price_regex.search(line)
-            if price_match:
+        для линия в block_lines:
+            price_match = price_regex.search(строка)
+            если цена_соответствует:
                 local_price = int(price_match.group(1))
-                for t_item in temp_items:
-                    if t_item["price"] is None:
-                        t_item["price"] = local_price
-                continue
+                для t_item в temp_items:
+                    эсли t_item["цена"] отсуствют:
+                        t_item["цена"] = локальная_цена
+                продолжать
                 
-            if line.startswith("✅"):
+            эсли строка.startswith("✅"):
                 clean_line = line.replace("✅", "").strip()
-                count = 1
+                количество = 1
                 count_match = re.search(r'—\s*(\d+)\s*шт', clean_line)
-                if count_match:
+                эсли count_match:
                     count = int(count_match.group(1))
                     clean_line = re.sub(r'—\s*\d+\s*шт\.?', '', clean_line).strip()
                 
@@ -211,23 +210,24 @@ async def age_denied(callback: CallbackQuery):
 # --- АДМИН-ФУНКЦИИ ---
 @dp.message(Command("admin"))
 async def admin_panel(message: Message):
-    if message.from_user.id != ADMIN_ID: return
+    if int(message.from_user.id) != int(str(ADMIN_ID).strip()): return
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Обновить наличие (Текст)", callback_data="admin_update")],
-        [InlineKeyboardButton(text="📋 Посмотреть остатки", callback_data="admin_stock")]
+        [InlineKeyboardButton(text="📋 Посмотреть остатки", callback_data="admin_stock")],
+        [InlineKeyboardButton(text="📉 Списать товар (-1 шт)", callback_data="admin_decrease_select_cat")]
     ])
     await message.answer("⚙️ Панель администратора ZKVR SHOP:", reply_markup=kb)
 
 @dp.callback_query(F.data == "admin_update")
 async def ask_for_inventory(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID: return
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
     await callback.message.answer("Перешли или отправь мне текст с актуальным наличием в твоем формате. Все старые товары будут удалены!")
     await state.set_state(ShopStates.waiting_for_inventory)
     await callback.answer()
 
 @dp.message(ShopStates.waiting_for_inventory)
 async def process_new_inventory(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
+    if int(message.from_user.id) != int(str(ADMIN_ID).strip()): return
     
     parsed_items = parse_inventory(message.text)
     if not parsed_items:
@@ -253,7 +253,7 @@ async def process_new_inventory(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "admin_stock")
 async def send_current_stock_as_text(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -279,6 +279,7 @@ async def send_current_stock_as_text(callback: CallbackQuery):
             
             for item in prod_items:
                 brand, name, count = item
+                if count <= 0: continue
                 cnt_str = f" — {count} шт." if count > 1 else ""
                 if cat_key in ["liquids", "pods", "snus"] and brand != "Разное":
                     output_text += f"✅{brand} — {name}{cnt_str}\n"
@@ -291,6 +292,96 @@ async def send_current_stock_as_text(callback: CallbackQuery):
     
     await callback.message.answer(output_text)
     await callback.answer()
+
+# --- ЛОГИКА РУЧНОГО СПИСАНИЯ ДЛЯ АДМИНА ---
+@dp.callback_query(F.data == "admin_decrease_select_cat")
+async def admin_dec_cat(callback: CallbackQuery):
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💧 Жидкости", callback_data="admdectype_liquids")],
+        [InlineKeyboardButton(text="🔌 Под-системы", callback_data="admdectype_pods")],
+        [InlineKeyboardButton(text="⚙️ Расходники", callback_data="admdectype_consumables")],
+        [InlineKeyboardButton(text="⚠️ Снюс", callback_data="admdectype_snus")]
+    ])
+    await callback.message.edit_text("⚙️ **Списание товара**\nВыбери категорию для удаления 1 штуки:", reply_markup=kb, parse_mode="Markdown")
+
+@dp.callback_query(F.data.startswith("admdectype_"))
+async def admin_dec_brand(callback: CallbackQuery):
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
+    category = callback.data.split("_")[1]
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT DISTINCT brand FROM products WHERE category = ? AND count > 0', (category,))
+    brands = cursor.fetchall()
+    conn.close()
+    
+    if not brands:
+        await callback.answer("В этой категории ничего нет.", show_alert=True)
+        return
+        
+    buttons = []
+    for b in brands:
+        buttons.append([InlineKeyboardButton(text=b[0], callback_data=f"admdecbrand_{category}_{b[0]}")])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_decrease_select_cat")])
+    
+    await callback.message.edit_text("Выбери производителя для списания:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@dp.callback_query(F.data.startswith("admdecbrand_"))
+async def admin_dec_items(callback: CallbackQuery):
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
+    _, category, brand = callback.data.split("_")
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, name, count FROM products WHERE category = ? AND brand = ? AND count > 0', (category, brand))
+    items = cursor.fetchall()
+    conn.close()
+    
+    buttons = []
+    for item in items:
+        p_id, name, count = item
+        buttons.append([InlineKeyboardButton(text=f"{name[:20]}... ({count} шт)", callback_data=f"admdecreal_{p_id}")])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data=f"admdectype_{category}")])
+    
+    await callback.message.edit_text(f"Нажми на товар, чтобы списать **1 шт** из базы:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
+
+@dp.callback_query(F.data.startswith("admdecreal_"))
+async def admin_dec_execute(callback: CallbackQuery):
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
+    p_id = int(callback.data.split("_")[1])
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT brand, name, count, category FROM products WHERE id = ?', (p_id,))
+    res = cursor.fetchone()
+    
+    if res:
+        brand, name, count, category = res
+        new_count = count - 1
+        cursor.execute('UPDATE products SET count = ? WHERE id = ?', (new_count, p_id))
+        conn.commit()
+        await callback.answer(f"Списано! Осталось: {max(0, new_count)} шт.", show_alert=True)
+        
+        cursor.execute('SELECT id, name, count FROM products WHERE category = ? AND brand = ? AND count > 0', (category, brand))
+        items = cursor.fetchall()
+        
+        buttons = []
+        for item in items:
+            buttons.append([InlineKeyboardButton(text=f"{item[1][:20]}... ({item[2]} шт)", callback_data=f"admdecreal_{item[0]}")])
+        buttons.append([InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")])
+        
+        await callback.message.edit_text(f"Успешно убрали 1 шт *{brand} — {name}*.\nМожно списать что-то еще из этой линейки:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
+    conn.close()
+
+@dp.callback_query(F.data == "back_to_admin_panel")
+async def back_to_admin_panel_handler(callback: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Обновить наличие (Текст)", callback_data="admin_update")],
+        [InlineKeyboardButton(text="📋 Посмотреть остатки", callback_data="admin_stock")],
+        [InlineKeyboardButton(text="📉 Списать товар (-1 шт)", callback_data="admin_decrease_select_cat")]
+    ])
+    await callback.message.edit_text("⚙️ Панель администратора ZKVR SHOP:", reply_markup=kb)
 
 # --- КАТАЛОГ ДЛЯ КЛИЕНТОВ ---
 @dp.callback_query(F.data.startswith("showcat_"))
@@ -456,63 +547,66 @@ async def checkout_cart(callback: CallbackQuery):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT p.id, p.brand, p.name, p.price, c.quantity, p.count 
-        FROM cart c 
-        JOIN products p ON c.product_id = p.id 
-        WHERE c.user_id = ?
+        ВЫБЕРИТЕ стр.идентификатор, п.бренд, п.имя, п.цена, с.количество, п.считать 
+        ИЗ корзины с 
+        ПРИСОЕДИНЕНИЕ к придоктаму п ОН в.идентификатор_продукта = п.идентификатор 
+        ГДЕ в.идентификатор_пользователя = ?
     ''', (user_id,))
     cart_items = cursor.fetchall()
     
-    if not cart_items:
-        await callback.answer("Корзина пуста!", show_alert=True)
+    если не cart_items:
+        await callback.answer("Корзина страница!", show_alert=True)
         conn.close()
-        return
+        возвращаться
         
-    for item in cart_items:
-        p_id, brand, name, price, quantity, stock = item
-        if stock < quantity:
-            await callback.answer(f"Ошибка! {name} осталось всего {stock} шт.", show_alert=True)
+    для товара в cart_items:
+        p_id, бренд, название, цена, количество, запас = товар
+        если запас < количество:
+            await callback.answer(f"Ошибка! {имя} сталось все {stock} шт.", show_alert=True)
             conn.close()
-            return
+            возвращаться
             
-    order_text = f"🚨 **Новая бронь!**\n\n👤 **Клиент:** {user.full_name} ({username})\n🆔 ID: `{user.id}`\n\n📦 **Состав заказа:**\n"
+    order_text = f"🚨 **Новая информация!**\n\n👤 **Клиент:** {user.full_name} ({имя пользователя})\n🆔 ID: `{user.id}`\n\n📦 **Состав заказ:**\n"
     client_text = f"🎉 **Бронь успешно оформлена!**\n\n📦 **Ваш заказ:**\n"
-    total_price = 0
+    общая_цена = 0
     
-    for item in cart_items:
-        p_id, brand, name, price, quantity, stock = item
-        cost = price * quantity
-        total_price += cost
-        item_line = f"• {brand} — {name} ({quantity} шт.) — {cost}₽\n"
-        order_text += item_line
-        client_text += item_line
+    для товара в cart_items:
+        p_id, бренд, название, цена, количество, запас = товар
+        стоимость = цена * количество
+        общая_цена += стоимость
+        item_line = f"• {бренд} — {название} ({количество} шт.) — {стоимость}₽\n"
+        текст_заказа += строка_элемента
+        текст_клиента += строка_элемента
         
-        new_stock = stock - quantity
-        cursor.execute('UPDATE products SET count = ? WHERE id = ?', (new_stock, p_id))
+        new_stock = max(0, запас - соличество)
+        cursor.execute('ОБНОВЛЕНИЕ приложений SET count = ? ГДЕ id = ?', (new_stock, p_id))
         
     order_text += f"\n💰 **Итого к оплате:** {total_price} руб."
     client_text += f"\n💰 **Итого к оплате:** {total_price} руб.\n\n⚠️ Бронь держится 24 часа. Ждем вас в магазине!"
     
-    cursor.execute('DELETE FROM cart WHERE user_id = ?', (user_id,))
+    cursor.execute('УДАЛИТЬ ИЗ корзины, ГДЕ user_id = ?', (user_id,))
     conn.commit()
     conn.close()
     
-    try:
-        await bot.send_message(chat_id=ADMIN_ID, text=order_text, parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"Не удалось отправить уведомление админу: {e}")
+    попробуйте:
+        target_admin = int(str(ADMIN_ID).strip())
+        ждать bot.send_message(chat_id=target_admin, text=order_text, parse_mode= "Markdown")
+        logging.info(f"Уведомление о заказе учётного управления {target_admin}")
+    за исключением исключения как е:
+        logging.error(f" КРИТИЧЕСКАЯ ОФИБКА ОТПРАВКИ АДМИНУ: {e}")
         
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 В меню", callback_data="back_to_main")]])
-    await callback.message.edit_text(client_text, reply_markup=kb, parse_mode="Markdown")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[[InlineKeyboardButton(text="🔄 В меню", callback_data="back_to_main")]]])
+    получить электронное сообщение.message.edit_text(client_text, reply_markup=kb, parse_mode= "Markdown")
     await callback.answer("Успешно забронировано!", show_alert=True)
 
 @dp.callback_query(F.data == "back_to_main")
-async def back_to_main_handler(callback: CallbackQuery):
-    await callback.message.edit_text("👋 Выберите категорию товара:", reply_markup=get_main_menu_kb())
-    await callback.answer()
+асинхронное приложение back_to_main_handler(обратный вход: CallbackQuery):
+    await callback.message.edit_text("👋 Выберете категорию товара:", reply_markup=get_main_menu_kb())
+    ждать обратного выzова.answer()
 
-async def main():
-    await dp.start_polling(bot)
+асинхроннѾѵ определьение main():
+    ждать bot.delete_webhook(drop_pending_updates=True)
+    ждать dp.start_polling(бот)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+эсли __name__ == "__main__":
+    asyncio.runosnovnoy() conn.commit())
