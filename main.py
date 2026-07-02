@@ -11,7 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 logging.basicConfig(level=logging.INFO)
 
-# --- ТВОИ ДАННЫЕ (ЗАФИКСИРОВАНЫ) ---
+# --- ТВОИ ДАННЫЕ ---
 BOT_TOKEN = "8940239980:AAH1u8qqQo9MtSpv4KHLlRcr6ckm3s3_ZQI"
 ADMIN_ID = 8344626747  
 
@@ -570,6 +570,9 @@ async def checkout_cart(callback: CallbackQuery):
     client_text = f"🎉 <b>Бронь успешно оформлена!</b>\n\n📦 <b>Ваш заказ:</b>\n"
     total_price = 0
     
+    # Собираем данные для кнопки отмены (id_товара:кол-во)
+    cancel_data_list = []
+    
     for item in cart_items:
         p_id, brand, name, price, quantity, stock = item
         cost = price * quantity
@@ -577,6 +580,8 @@ async def checkout_cart(callback: CallbackQuery):
         item_line = f"• {brand} — {name} ({quantity} шт.) — {cost}₽\n"
         order_text += item_line
         client_text += item_line
+        
+        cancel_data_list.append(f"{p_id}:{quantity}")
         
         new_stock = max(0, stock - quantity)
         cursor.execute('UPDATE products SET count = ? WHERE id = ?', (new_stock, p_id))
@@ -588,9 +593,18 @@ async def checkout_cart(callback: CallbackQuery):
     conn.commit()
     conn.close()
     
+    # Генерируем сжатую строку отмены для callback_data (ограничение Telegram 64 байта)
+    # Формат: cancelord_юзерID_p1:q1-p2:q2
+    items_encoded = "-".join(cancel_data_list)[:35] # обрезка на случай гигантских заказов
+    admin_callback = f"cancelord_{user_id}_{items_encoded}"
+    
+    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отменить бронь", callback_data=admin_callback)]
+    ])
+    
     try:
         target_admin = int(str(ADMIN_ID).strip())
-        await bot.send_message(chat_id=target_admin, text=order_text, parse_mode="HTML")
+        await bot.send_message(chat_id=target_admin, text=order_text, reply_markup=admin_kb, parse_mode="HTML")
         logging.info(f"Уведомление о заказе успешно отправлено админу {target_admin}")
     except Exception as e:
         logging.error(f" КРИТИЧЕСКАЯ ОШИБКА ОТПРАВКИ АДМИНУ: {e}")
@@ -598,6 +612,44 @@ async def checkout_cart(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 В меню", callback_data="back_to_main")]])
     await callback.message.edit_text(client_text, reply_markup=kb, parse_mode="HTML")
     await callback.answer("Успешно забронировано!", show_alert=True)
+
+# --- ОБРАБОТЧИК ОТМЕНЫ БРОНИ АДМИНИСТРАТОРОМ ---
+@dp.callback_query(F.data.startswith("cancelord_"))
+async def admin_cancel_order(callback: CallbackQuery):
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
+    
+    # Разбираем callback: cancelord_юзерID_p1:q1-p2:q2
+    parts = callback.data.split("_")
+    client_id = int(parts[1])
+    encoded_items = parts[2]
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Возвращаем товары обратно на склад
+    item_blocks = encoded_items.split("-")
+    for block in item_blocks:
+        if ":" in block:
+            p_id, quantity = map(int, block.split(":"))
+            cursor.execute('UPDATE products SET count = count + ? WHERE id = ?', (quantity, p_id))
+            
+    conn.commit()
+    conn.close()
+    
+    # Уведомляем клиента об отмене
+    try:
+        await bot.send_message(
+            chat_id=client_id, 
+            text="⚠️ <b>Ваша бронь была отменена администратором магазина.</b>\nТовары возвращены на витрину бота.",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass # Если пользователь заблокировал бота
+        
+    # Обновляем текст сообщения у админа, убирая кнопку
+    updated_text = callback.message.text + "\n\n❌ <b>БРОНЬ ОТМЕНЕНА АДМИНИСТРАТОРОМ</b>"
+    await callback.message.edit_text(updated_text, reply_markup=None, parse_mode="HTML")
+    await callback.answer("Бронь успешно отменена, товары возвращены на склад!", show_alert=True)
 
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main_handler(callback: CallbackQuery):
