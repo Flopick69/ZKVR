@@ -11,9 +11,9 @@ from aiogram.fsm.state import State, StatesGroup
 
 logging.basicConfig(level=logging.INFO)
 
-# !!! ОБЯЗАТЕЛЬНО ВСТАВЬ СВОИ ДАННЫЕ !!!
+# --- ТВОИ ДАННЫЕ (УЖЕ ВСТАВЛЕНЫ) ---
 BOT_TOKEN = "8940239980:AAH1u8qqQo9MtSpv4KHLlRcr6ckm3s3_ZQI"
-ADMIN_ID = 8344626747  # Твой Telegram ID (Укажи свои цифры)
+ADMIN_ID = 8344626747  
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -542,7 +542,7 @@ async def clear_cart(callback: CallbackQuery):
 async def checkout_cart(callback: CallbackQuery):
     user_id = callback.from_user.id
     user = callback.from_user
-    username = f"@{user_username}" if (user_username := user.username) else "Нет юзернейма"
+    username = f"@{user.username}" if user.username else "Нет юзернейма"
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -595,7 +595,7 @@ async def checkout_cart(callback: CallbackQuery):
     except Exception as e:
         logging.error(f" КРИТИЧЕСКАЯ ОШИБКА ОТПРАВКИ АДМИНУ: {e}")
         
-    kb = InlineKeyboardMarkup(inline_keyboard=[[[InlineKeyboardButton(text="🔄 В меню", callback_data="back_to_main")]]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 В меню", callback_data="back_to_main")]])
     await callback.message.edit_text(client_text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer("Успешно забронировано!", show_alert=True)
 
