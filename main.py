@@ -1,65 +1,65 @@
-импорт асинкио
-импорт sqlite3
-импорт ведение журнала
-импорт ос
-импорт повторно
-от айограмма импорт Бот, Диспетчер, Ф
-от айограмма.типы импорт Сообщение, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-от айограммы.фильтры импорт Команда
-от айограммы.фсм.контекст импорт ФСМКонтекст
-от айограммы.фсм.состояние импорт Государство, Группа государств
+import asyncio
+import logging
+import sqlite3
+import os
+import re
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
-ведение журнала.basicConfig(уровень=ведение журнала.ИНФОРМАЦИЯ)
+logging.basicConfig(level=logging.INFO)
 
 # !!! ОБЯЗАТЕЛЬНО ВСТАВЬ СВОИ ДАННЫЕ !!!
 BOT_TOKEN = "8940239980:AAH1u8qqQo9MtSpv4KHLlRcr6ckm3s3_ZQI"
-ADMIN_ID = 8344626747  # Твой идентификатор Телеграмма
+ADMIN_ID = 8344626747  # Твой Telegram ID
 
-бот = Бот(токен=BOT_TOKEN)
-дп = Диспетчер()
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
 
 # --- ПУТЬ К БАЗЕ ДАННЫХ ---
-BASE_DIR = ос.путь.имя каталога(ос.путь.абспат(__файл__))
-DB_PATH = ос.путь.присоединиться(БАЗОВЫЙ_КАТАЛОГ, 'shop.db')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'shop.db')
 
-класс ShopStates(Группа государств):
-    ожидание_возраста_= Состояние()
-    ожидание_инвентаря_ = Состояние()
+class ShopStates(StatesGroup):
+    waiting_for_age = State()
+    waiting_for_inventory = State()
 
 # --- ФУНКЦИЯ ПАРСЕРА НАЛИЧИЯ (ТЕПЕРЬ ТУТ) ---
-деф parse_инвентарь(текст: стр) -> список:
-    строки = текст.расколоть('\н')
-    price_regex = re.компилировать(r'(?:Цена|Стоимость)\s*:\s*(\d+)\s*(?:руб|р)?', повторно.ИГНОРИРОВАТЬ СЛУЧАЙ)
+def parse_inventory(text: str) -> list:
+    lines = text.split('\n')
+    price_regex = re.compile(r'(?:Цена|Стоимость)\s*:\s*(\d+)\s*(?:руб|р)?', re.IGNORECASE)
     
-    блоки = []
-    текущий_блок = {"категория": Нет, "линии": []}
+    blocks = []
+    current_block = {"category": None, "lines": []}
     
-    для линия в линии:
-        линия = линия.полоска()
-        если нет линия:
-            продолжать
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
             
-        если "💧" в линия или "Жидкости" в линия:
-            если текущий_блок["линии"]: блоки.добавить(текущий_блок)
-            текущий_блок = {"категория": "жидкости", "линии": []}
-            продолжать
-        Элиф "🔌" в линия или "Под-системы" в линия:
-            если текущий_блок["линии"]: блоки.добавить(текущий_блок)
-            текущий_блок = {"категория": "стручки", "линии": []}
-            продолжать
-        Элиф "⚙️" в линия или "Расходники" в линия или "Испарители" в линия:
-            если текущий_блок["линии"]: блоки.добавить(текущий_блок)
-            текущий_блок = {"категория": "расходные материалы", "линии": []}
-            продолжать
-        Элиф "⚠️" в линия или "Снюс" в линия:
-            если текущий_блок["линии"]: блоки.добавить(текущий_блок)
-            текущий_блок = {"категория": "снюс", "линии": []}
-            продолжать
-        Элиф "❗️" в линия или "По покупке" в линия или "Ссылка" в линия:
-            продолжать
+        if "💧" in line or "Жидкости" in line:
+            if current_block["lines"]: blocks.append(current_block)
+            current_block = {"category": "liquids", "lines": []}
+            continue
+        elif "🔌" in line or "Под-системы" in line:
+            if current_block["lines"]: blocks.append(current_block)
+            current_block = {"category": "pods", "lines": []}
+            continue
+        elif "⚙️" in line or "Расходники" in line or "Испарители" in line:
+            if current_block["lines"]: blocks.append(current_block)
+            current_block = {"category": "consumables", "lines": []}
+            continue
+        elif "⚠️" in line or "Снюс" in line:
+            if current_block["lines"]: blocks.append(current_block)
+            current_block = {"category": "snus", "lines": []}
+            continue
+        elif "❗️" in line or "По покупке" in line or "Ссылка" in line:
+            continue
             
-        если текущий_блок["категория"]:
-            текущий_блок["линии"].добавить(линия)
+        if current_block["category"]:
+            current_block["lines"].append(line)
             
     if current_block["lines"]:
         blocks.append(current_block)
