@@ -11,7 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 logging.basicConfig(level=logging.INFO)
 
-# --- ТВОИ ДАННЫЕ (УЖЕ ВСТАВЛЕНЫ) ---
+# --- ТВОИ ДАННЫЕ (ЗАФИКСИРОВАНЫ) ---
 BOT_TOKEN = "8940239980:AAH1u8qqQo9MtSpv4KHLlRcr6ckm3s3_ZQI"
 ADMIN_ID = 8344626747  
 
@@ -194,7 +194,7 @@ async def start_cmd(message: Message, state: FSMContext):
             [InlineKeyboardButton(text="Мне есть 18 лет 🔞", callback_data="age_yes")],
             [InlineKeyboardButton(text="Мне нет 18 лет", callback_data="age_no")]
         ])
-        await message.answer("⚠️ **ВЕРИФИКАЦИЯ ВОЗРАСТА** ⚠️\n\nДля доступа к боту подтвердите, что вам исполнилось 18 лет.", reply_markup=kb, parse_mode="Markdown")
+        await message.answer("⚠️ <b>ВЕРИФИКАЦИЯ ВОЗРАСТА</b> ⚠️\n\nДля доступа к боту подтвердите, что вам исполнилось 18 лет.", reply_markup=kb, parse_mode="HTML")
         await state.set_state(ShopStates.waiting_for_age)
 
 @dp.callback_query(ShopStates.waiting_for_age, F.data == "age_yes")
@@ -303,7 +303,7 @@ async def admin_dec_cat(callback: CallbackQuery):
         [InlineKeyboardButton(text="⚙️ Расходники", callback_data="admdectype_consumables")],
         [InlineKeyboardButton(text="⚠️ Снюс", callback_data="admdectype_snus")]
     ])
-    await callback.message.edit_text("⚙️ **Списание товара**\nВыбери категорию для удаления 1 штуки:", reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text("⚙️ <b>Списание товара</b>\nВыбери категорию для удаления 1 штуки:", reply_markup=kb, parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("admdectype_"))
 async def admin_dec_brand(callback: CallbackQuery):
@@ -344,7 +344,7 @@ async def admin_dec_items(callback: CallbackQuery):
         buttons.append([InlineKeyboardButton(text=f"{name[:20]}... ({count} шт)", callback_data=f"admdecreal_{p_id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data=f"admdectype_{category}")])
     
-    await callback.message.edit_text(f"Нажми на товар, чтобы списать **1 шт** из базы:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
+    await callback.message.edit_text(f"Нажми на товар, чтобы списать <b>1 шт</b> из базы:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("admdecreal_"))
 async def admin_dec_execute(callback: CallbackQuery):
@@ -371,7 +371,7 @@ async def admin_dec_execute(callback: CallbackQuery):
             buttons.append([InlineKeyboardButton(text=f"{item[1][:20]}... ({item[2]} шт)", callback_data=f"admdecreal_{item[0]}")])
         buttons.append([InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")])
         
-        await callback.message.edit_text(f"Успешно убрали 1 шт *{brand} — {name}*.\nМожно списать что-то еще из этой линейки:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
+        await callback.message.edit_text(f"Успешно убрали 1 шт <b>{brand} — {name}</b>.\nМожно списать что-то еще из этой линейки:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
     conn.close()
 
 @dp.callback_query(F.data == "back_to_admin_panel")
@@ -437,13 +437,13 @@ async def client_item_info(callback: CallbackQuery):
         return
         
     category, brand, name, price, count = item
-    text = f"📋 **Товар:** {brand} — {name}\n💰 **Цена:** {price} руб.\n📦 **В наличии:** {count} шт."
+    text = f"📋 <b>Товар:</b> {brand} — {name}\n💰 <b>Цена:</b> {price} руб.\n📦 <b>В наличии:</b> {count} шт."
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Добавить в корзину", callback_data=f"addtocart_{p_id}")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data=f"showbrand_{category}_{brand}")]
     ])
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
 # --- ЛОГИКА КОРЗИНЫ ---
 @dp.callback_query(F.data.startswith("addtocart_"))
@@ -496,7 +496,7 @@ async def view_cart(callback: CallbackQuery):
         await callback.message.edit_text("🛒 Твоя корзина пуста.", reply_markup=kb)
         return
         
-    text = "🛒 **Ваша корзина:**\n\n"
+    text = "🛒 <b>Ваша корзина:</b>\n\n"
     total_price = 0
     buttons = []
     
@@ -508,12 +508,12 @@ async def view_cart(callback: CallbackQuery):
         text += f"▪️ {brand} - {name}\n   {quantity} шт. х {price}₽ = {cost}₽\n\n"
         buttons.append([InlineKeyboardButton(text=f"❌ Удалить {name[:15]}...", callback_data=f"delcart_{p_id}")])
         
-    text += f"Total: 💰 **{total_price} руб.**"
+    text += f"Total: 💰 <b>{total_price} руб.</b>"
     buttons.append([InlineKeyboardButton(text="✅ Забронировать всё", callback_data="checkout_cart")])
     buttons.append([InlineKeyboardButton(text="🗑 Очистить корзину", callback_data="clear_cart")])
     buttons.append([InlineKeyboardButton(text="🔙 Продолжить покупки", callback_data="back_to_main")])
     
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("delcart_"))
 async def delete_item_from_cart(callback: CallbackQuery):
@@ -566,8 +566,8 @@ async def checkout_cart(callback: CallbackQuery):
             conn.close()
             return
             
-    order_text = f"🚨 **Новая бронь!**\n\n👤 **Клиент:** {user.full_name} ({username})\n🆔 ID: `{user.id}`\n\n📦 **Состав заказа:**\n"
-    client_text = f"🎉 **Бронь успешно оформлена!**\n\n📦 **Ваш заказ:**\n"
+    order_text = f"🚨 <b>Новая бронь!</b>\n\n👤 <b>Клиент:</b> {user.full_name} ({username})\n🆔 ID: <code>{user.id}</code>\n\n📦 <b>Состав заказа:</b>\n"
+    client_text = f"🎉 <b>Бронь успешно оформлена!</b>\n\n📦 <b>Ваш заказ:</b>\n"
     total_price = 0
     
     for item in cart_items:
@@ -581,8 +581,8 @@ async def checkout_cart(callback: CallbackQuery):
         new_stock = max(0, stock - quantity)
         cursor.execute('UPDATE products SET count = ? WHERE id = ?', (new_stock, p_id))
         
-    order_text += f"\n💰 **Итого к оплате:** {total_price} руб."
-    client_text += f"\n💰 **Итого к оплате:** {total_price} руб.\n\n⚠️ Бронь держится 24 часа. Ждем вас в магазине!"
+    order_text += f"\n💰 <b>Итого к оплате:</b> {total_price} руб."
+    client_text += f"\n💰 <b>Итого к оплате:</b> {total_price} руб.\n\n⚠️ Бронь держится 24 часа. Ждем вас в магазине!"
     
     cursor.execute('DELETE FROM cart WHERE user_id = ?', (user_id,))
     conn.commit()
@@ -590,13 +590,13 @@ async def checkout_cart(callback: CallbackQuery):
     
     try:
         target_admin = int(str(ADMIN_ID).strip())
-        await bot.send_message(chat_id=target_admin, text=order_text, parse_mode="Markdown")
+        await bot.send_message(chat_id=target_admin, text=order_text, parse_mode="HTML")
         logging.info(f"Уведомление о заказе успешно отправлено админу {target_admin}")
     except Exception as e:
         logging.error(f" КРИТИЧЕСКАЯ ОШИБКА ОТПРАВКИ АДМИНУ: {e}")
         
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 В меню", callback_data="back_to_main")]])
-    await callback.message.edit_text(client_text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(client_text, reply_markup=kb, parse_mode="HTML")
     await callback.answer("Успешно забронировано!", show_alert=True)
 
 @dp.callback_query(F.data == "back_to_main")
