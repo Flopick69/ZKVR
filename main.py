@@ -42,12 +42,10 @@ async def user_tracking_middleware(handler, event: Message, data: dict):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Проверяем, существует ли юзер
     cursor.execute('SELECT is_banned FROM users WHERE user_id = ?', (user.id,))
     res = cursor.fetchone()
     
     if res is None:
-        # Если новый пользователь — сохраняем со всеми данными
         cursor.execute('''
             INSERT INTO users (user_id, username, full_name, created_at, is_adult, is_banned)
             VALUES (?, ?, ?, ?, 0, 0)
@@ -56,7 +54,6 @@ async def user_tracking_middleware(handler, event: Message, data: dict):
         is_banned = 0
     else:
         is_banned = res[0]
-        # Обновляем юзернейм и имя на случай, если пользователь их изменил
         cursor.execute('UPDATE users SET username = ?, full_name = ? WHERE user_id = ?', (username, full_name, user.id))
         conn.commit()
         
@@ -64,7 +61,7 @@ async def user_tracking_middleware(handler, event: Message, data: dict):
     
     if is_banned == 1 and int(user.id) != int(str(ADMIN_ID).strip()):
         await event.answer("🚫 <b>Доступ заблокирован.</b> Вы были забанены администратором.", parse_mode="HTML")
-        return # Останавливаем обработку
+        return 
         
     return await handler(event, data)
 
@@ -86,104 +83,94 @@ async def user_tracking_callback_middleware(handler, event: CallbackQuery, data:
         
     return await handler(event, data)
 
-# --- ФУНКЦИЯ ПАРСЕРА НАЛИЧИЯ ---
+# --- ИСПРАВЛЕННАЯ ФУНКЦИЯ ПАРСЕРА НАЛИЧИЯ ---
 def parse_inventory(text: str) -> list:
     lines = text.split('\n')
     price_regex = re.compile(r'(?:Цена|Стоимость)\s*:\s*(\d+)\s*(?:руб|р)?', re.IGNORECASE)
     
-    blocks = []
-    current_block = {"category": None, "lines": []}
+    items = []
+    current_cat = None
+    temp_items_for_price = []
     
     for line in lines:
         line = line.strip()
         if not line:
             continue
             
+        # Определение категории по эмодзи или ключевым словам
         if "💧" in line or "Жидкости" in line:
-            if current_block["lines"]: blocks.append(current_block)
-            current_block = {"category": "liquids", "lines": []}
+            current_cat = "liquids"
+            temp_items_for_price = []
             continue
         elif "🔌" in line or "Под-системы" in line:
-            if current_block["lines"]: blocks.append(current_block)
-            current_block = {"category": "pods", "lines": []}
+            current_cat = "pods"
+            temp_items_for_price = []
             continue
         elif "⚙️" in line or "Расходники" in line or "Испарители" in line:
-            if current_block["lines"]: blocks.append(current_block)
-            current_block = {"category": "consumables", "lines": []}
+            current_cat = "consumables"
+            temp_items_for_price = []
             continue
         elif "⚠️" in line or "Снюс" in line:
-            if current_block["lines"]: blocks.append(current_block)
-            current_block = {"category": "snus", "lines": []}
+            current_cat = "snus"
+            temp_items_for_price = []
             continue
         elif "❗️" in line or "По покупке" in line or "Ссылка" in line:
             continue
             
-        if current_block["category"]:
-            current_block["lines"].append(line)
+        if not current_cat:
+            continue
             
-    if current_block["lines"]:
-        blocks.append(current_block)
-
-    items = []
-    for block in blocks:
-        cat = block["category"]
-        block_lines = block["lines"]
-        temp_items = []
-        local_price = None
+        # Если строка — это цена
+        price_match = price_regex.search(line)
+        if price_match:
+            current_price = int(price_match.group(1))
+            # Присваиваем эту цену всем накопленным выше товарам, у которых еще нет цены
+            for t_item in temp_items_for_price:
+                t_item["price"] = current_price
+                items.append(t_item)
+            temp_items_for_price = [] # Очищаем буфер для следующего блока цен
+            continue
+            
+        # Если строка — это товар
+        if line.startswith("✅"):
+            clean_line = line.replace("✅", "").strip()
+            count = 1
+            count_match = re.search(r'—\s*(\d+)\s*шт', clean_line)
+            if count_match:
+                count = int(count_match.group(1))
+                clean_line = re.sub(r'—\s*\d+\s*шт\.?', '', clean_line).strip()
+            
+            brand = "Разное"
+            name = clean_line
+            
+            if current_cat in ["liquids", "pods", "snus"]:
+                if "—" in clean_line:
+                    parts = clean_line.split("—", 1)
+                    brand = parts[0].strip()
+                    name = parts[1].strip()
+                else:
+                    parts = clean_line.split(" ", 1)
+                    brand = parts[0].strip()
+                    name = parts[1].strip() if len(parts) > 1 else parts[0].strip()
+            elif current_cat == "consumables":
+                if "Испаритель" in clean_line:
+                    brand = "Испарители"
+                elif "Картридж" in clean_line:
+                    brand = "Картриджи"
+            
+            temp_items_for_price.append({
+                "category": current_cat,
+                "brand": brand,
+                "name": name,
+                "price": None, # Установим, когда дойдем до строчки с ценой
+                "count": count
+            })
+            
+    # На случай, если админ забыл написать цену в самом конце категории
+    for t_item in temp_items_for_price:
+        t_item["price"] = 0
+        items.append(t_item)
         
-        for line in block_lines:
-            price_match = price_regex.search(line)
-            if price_match:
-                local_price = int(price_match.group(1))
-                for t_item in temp_items:
-                    if t_item["price"] is None:
-                        t_item["price"] = local_price
-                continue
-                
-            if line.startswith("✅"):
-                clean_line = line.replace("✅", "").strip()
-                count = 1
-                count_match = re.search(r'—\s*(\d+)\s*шт', clean_line)
-                if count_match:
-                    count = int(count_match.group(1))
-                    clean_line = re.sub(r'—\s*\d+\s*шт\.?', '', clean_line).strip()
-                
-                brand = "Разное"
-                name = clean_line
-                
-                if cat in ["liquids", "pods"]:
-                    if "—" in clean_line:
-                        parts = clean_line.split("—", 1)
-                        brand = parts[0].strip()
-                        name = parts[1].strip()
-                    else:
-                        parts = clean_line.split(" ", 1)
-                        brand = parts[0].strip()
-                        name = parts[1].strip() if len(parts) > 1 else parts[0].strip()
-                elif cat == "consumables":
-                    if "Испаритель" in clean_line:
-                        brand = "Испарители"
-                    elif "Картридж" in clean_line:
-                        brand = "Картриджи"
-                elif cat == "snus":
-                    if "—" in clean_line:
-                        parts = clean_line.split("—", 1)
-                        brand = parts[0].strip()
-                        name = parts[1].strip()
-                
-                temp_items.append({
-                    "category": cat,
-                    "brand": brand,
-                    "name": name,
-                    "price": local_price,
-                    "count": count
-                })
-        
-        for t_item in temp_items:
-            if t_item["price"] is None:
-                t_item["price"] = local_price if local_price else 0
-            items.append(t_item)
-
     return items
 
 # --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ---
@@ -211,32 +198,11 @@ def init_db():
             is_banned INTEGER DEFAULT 0
         )
     ''')
-    
-    cursor.execute("PRAGMA table_info(users)")
-    columns = [col[1] for col in cursor.fetchall()]
-    if "username" not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN username TEXT")
-    if "full_name" not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN full_name TEXT")
-    if "created_at" not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN created_at TEXT")
-    if "is_banned" not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS cart (
-            user_id INTEGER,
-            product_id INTEGER,
-            quantity INTEGER,
-            PRIMARY KEY (user_id, product_id)
-        )
-    ''')
     conn.commit()
     conn.close()
 
 init_db()
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БД ---
 def check_user_adult(user_id):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -325,6 +291,8 @@ async def process_new_inventory(message: Message, state: FSMContext):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('DELETE FROM products')
+    
+    # Очищаем корзины, так как ID товаров полностью меняются
     cursor.execute('DELETE FROM cart')
     
     for item in parsed_items:
@@ -339,6 +307,7 @@ async def process_new_inventory(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(f"✅ Успешно добавлено товаров: {len(parsed_items)} шт. Витрина обновлена!")
 
+# --- ИСПРАВЛЕННЫЙ КРАСИВЫЙ ВЫВОД ОСТАТКОВ ПО ЦЕНОВЫМ БЛОКАМ ---
 @dp.callback_query(F.data == "admin_stock")
 async def send_current_stock_as_text(callback: CallbackQuery):
     if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
@@ -347,38 +316,61 @@ async def send_current_stock_as_text(callback: CallbackQuery):
     cursor = conn.cursor()
     
     categories = {
-        "liquids": "🌊Жидкости",
+        "liquids": "💧 Жидкости",
         "pods": "🔌 Под-системы:",
-        "consumables": "⚙️ Расходники / Испарители:",
-        "snus": "⚠️Снюс:"
+        "consumables": "⚙️ Расходники:",
+        "snus": "⚠️ Снюс:"
     }
     
     output_text = "❗️ZKVR SHOP❗️\n"
+    
     for cat_key, cat_name in categories.items():
-        cursor.execute('SELECT DISTINCT price FROM products WHERE category = ? ORDER BY price ASC', (cat_key,))
-        prices = cursor.fetchall()
-        if not prices: continue
-        
+        # Сначала проверяем, есть ли вообще товары в этой категории
+        cursor.execute('SELECT COUNT(*) FROM products WHERE category = ? AND count > 0', (cat_key,))
+        if cursor.fetchone()[0] == 0:
+            continue
+            
         output_text += f"\n{cat_name}\n"
+        
+        # Получаем уникальные цены для текущей категории в том порядке, в котором они заносились (по ID)
+        cursor.execute('''
+            SELECT price FROM products 
+            WHERE category = ? AND count > 0 
+            GROUP BY price 
+            ORDER BY MIN(id) ASC
+        ''', (cat_key,))
+        prices = cursor.fetchall()
+        
         for p_row in prices:
             price = p_row[0]
-            cursor.execute('SELECT brand, name, count FROM products WHERE category = ? AND price = ?', (cat_key, price))
+            # Вытаскиваем товары конкретно этой категории и этой цены в порядке их добавления
+            cursor.execute('''
+                SELECT brand, name, count FROM products 
+                WHERE category = ? AND price = ? AND count > 0 
+                ORDER BY id ASC
+            ''', (cat_key, price))
             prod_items = cursor.fetchall()
             
             for item in prod_items:
                 brand, name, count = item
-                if count <= 0: continue
                 cnt_str = f" — {count} шт." if count > 1 else ""
+                
                 if cat_key in ["liquids", "pods", "snus"] and brand != "Разное":
                     output_text += f"✅{brand} — {name}{cnt_str}\n"
                 else:
                     output_text += f"✅{name}{cnt_str}\n"
+                    
             output_text += f"Цена: {price} руб.\n"
             
     output_text += "\nПо покупке писать: @PornHub_Tag\nСсылка для друга: https://t.me/+VTJW9uNAfTZmYmQy"
     conn.close()
     
-    await callback.message.answer(output_text)
+    # Если текст слишком большой, разбиваем на части
+    if len(output_text) > 4000:
+        for i in range(0, len(output_text), 4000):
+            await callback.message.answer(output_text[i:i+4000])
+    else:
+        await callback.message.answer(output_text)
     await callback.answer()
 
 # --- ФУНКЦИИ ПРОСМОТРА ПОЛЬЗОВАТЕЛЕЙ И БАНОВ ---
@@ -403,7 +395,6 @@ async def admin_users_list(callback: CallbackQuery):
         date_formatted = created_at if created_at else "Нет даты"
         text += f"👤 <b>{full_name}</b> ({username}){ban_status}\n🆔 ID: <code>{u_id}</code>\n📅 Вход: {date_formatted}\n\n"
         
-    # ИСПРАВЛЕНО: Теперь тут правильные двойные скобки для клавиатуры
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")]])
     
     if len(text) > 4000:
@@ -492,7 +483,6 @@ async def process_unban_id(message: Message, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")]])
     await message.answer(f"🟢 Пользователь <b>{user_found[1]}</b> ({user_found[0]}) с ID <code>{target_id}</code> успешно <b>РАЗБАНИТЬ</b>!", reply_markup=kb, parse_mode="HTML")
-
 
 # --- ЛОГИКА РУЧНОГО СПИСАНИЯ ДЛЯ АДМИНА ---
 @dp.callback_query(F.data == "admin_decrease_select_cat")
@@ -777,7 +767,6 @@ async def checkout_cart(callback: CallbackQuery):
         new_stock = max(0, stock - quantity)
         cursor.execute('UPDATE products SET count = ? WHERE id = ?', (new_stock, p_id))
         
-    # ИСПРАВЛЕНО: Убрано случайное слово 'text' из лога стоимости
     order_text += f"\n💰 <b>Итого к оплате:</b> {total_price} руб."
     client_text += f"\n💰 <b>Итого к оплате:</b> {total_price} руб.\n\n⚠️ Бронь держится 24 часа. Ждем вас в магазине!"
     
@@ -795,15 +784,13 @@ async def checkout_cart(callback: CallbackQuery):
     try:
         target_admin = int(str(ADMIN_ID).strip())
         await bot.send_message(chat_id=target_admin, text=order_text, reply_markup=admin_kb, parse_mode="HTML")
-        logging.info(f"Уведомление о заказе успешно отправлено админу {target_admin}")
     except Exception as e:
-        logging.error(f" КРИТИЧЕСКАЯ ОШИБКА ОТПРАВКИ АДМИНУ: {e}")
+        logging.error(f" Ошибка отправки админу: {e}")
         
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 В меню", callback_data="back_to_main")]])
     await callback.message.edit_text(client_text, reply_markup=kb, parse_mode="HTML")
     await callback.answer("Успешно забронировано!", show_alert=True)
 
-# --- ОБРАБОТЧИК ОТМЕНЫ БРОНИ АДМИНИСТРАТОРОМ ---
 @dp.callback_query(F.data.startswith("cancelord_"))
 async def admin_cancel_order(callback: CallbackQuery):
     if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
