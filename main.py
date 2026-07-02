@@ -64,7 +64,7 @@ async def user_tracking_middleware(handler, event: Message, data: dict):
     
     if is_banned == 1 and int(user.id) != int(str(ADMIN_ID).strip()):
         await event.answer("🚫 <b>Доступ заблокирован.</b> Вы были забанены администратором.", parse_mode="HTML")
-        return # Останавливаем обработку, код дальше не идет
+        return # Останавливаем обработку
         
     return await handler(event, data)
 
@@ -201,7 +201,6 @@ def init_db():
         )
     ''')
     
-    # Обновляем таблицу пользователей с поддержкой сбора статистики и банов
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -213,7 +212,6 @@ def init_db():
         )
     ''')
     
-    # Миграция старых БД (добавление колонок, если их не было)
     cursor.execute("PRAGMA table_info(users)")
     columns = [col[1] for col in cursor.fetchall()]
     if "username" not in columns:
@@ -405,9 +403,9 @@ async def admin_users_list(callback: CallbackQuery):
         date_formatted = created_at if created_at else "Нет даты"
         text += f"👤 <b>{full_name}</b> ({username}){ban_status}\n🆔 ID: <code>{u_id}</code>\n📅 Вход: {date_formatted}\n\n"
         
-    kb = InlineKeyboardMarkup(inline_keyboard=[[[InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")]]])
+    # ИСПРАВЛЕНО: Теперь тут правильные двойные скобки для клавиатуры
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")]])
     
-    # Если текст огромный (больше 4000 символов), разбиваем его на части
     if len(text) > 4000:
         for i in range(0, len(text), 4000):
             await callback.message.answer(text[i:i+4000], parse_mode="HTML")
@@ -457,7 +455,7 @@ async def process_ban_id(message: Message, state: FSMContext):
     conn.close()
     
     await state.clear()
-    kb = InlineKeyboardMarkup(inline_keyboard=[[[InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")]]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")]])
     await message.answer(f"🚫 Пользователь <b>{user_found[1]}</b> ({user_found[0]}) с ID <code>{target_id}</code> успешно <b>ЗАБАНЕН</b>!", reply_markup=kb, parse_mode="HTML")
 
 @dp.callback_query(F.data == "unban_user_action")
@@ -492,7 +490,7 @@ async def process_unban_id(message: Message, state: FSMContext):
     conn.close()
     
     await state.clear()
-    kb = InlineKeyboardMarkup(inline_keyboard=[[[InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")]]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 В админку", callback_data="back_to_admin_panel")]])
     await message.answer(f"🟢 Пользователь <b>{user_found[1]}</b> ({user_found[0]}) с ID <code>{target_id}</code> успешно <b>РАЗБАНИТЬ</b>!", reply_markup=kb, parse_mode="HTML")
 
 
@@ -779,7 +777,8 @@ async def checkout_cart(callback: CallbackQuery):
         new_stock = max(0, stock - quantity)
         cursor.execute('UPDATE products SET count = ? WHERE id = ?', (new_stock, p_id))
         
-    order_text += f"\n💰 <b>Итого к оплате:</b> {total_price} text руб."
+    # ИСПРАВЛЕНО: Убрано случайное слово 'text' из лога стоимости
+    order_text += f"\n💰 <b>Итого к оплате:</b> {total_price} руб."
     client_text += f"\n💰 <b>Итого к оплате:</b> {total_price} руб.\n\n⚠️ Бронь держится 24 часа. Ждем вас в магазине!"
     
     cursor.execute('DELETE FROM cart WHERE user_id = ?', (user_id,))
