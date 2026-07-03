@@ -83,7 +83,7 @@ async def user_tracking_callback_middleware(handler, event: CallbackQuery, data:
         
     return await handler(event, data)
 
-# --- УМНАЯ ФУНКЦИЯ ПАРСЕРА НАЛИЧИЯ (ГРУППИРОВКА ПО БЛОКАМ ЦЕН) ---
+# --- УМНАЯ ФУНКЦИЯ ПАРСЕРА НАЛИЧИЯ ---
 def parse_inventory(text: str) -> list:
     lines = text.split('\n')
     price_regex = re.compile(r'(?:Цена|Стоимость)\s*:\s*(\d+)\s*(?:руб|р)?', re.IGNORECASE)
@@ -97,7 +97,6 @@ def parse_inventory(text: str) -> list:
         if not line:
             continue
             
-        # Определение категории по ключевым эмодзи
         if "💧" in line or "Жидкости" in line:
             current_cat = "liquids"
             temp_items_for_price = []
@@ -120,18 +119,15 @@ def parse_inventory(text: str) -> list:
         if not current_cat:
             continue
             
-        # Если строка — это цена
         price_match = price_regex.search(line)
         if price_match:
             current_price = int(price_match.group(1))
-            # Присваиваем эту цену всем накопленным товарам в текущем блоке
             for t_item in temp_items_for_price:
                 t_item["price"] = current_price
                 items.append(t_item)
-            temp_items_for_price = [] # Сбрасываем временный буфер для следующего блока цен
+            temp_items_for_price = [] 
             continue
             
-        # Если строка — это позиция товара
         if line.startswith("✅"):
             clean_line = line.replace("✅", "").strip()
             count = 1
@@ -166,14 +162,13 @@ def parse_inventory(text: str) -> list:
                 "count": count
             })
             
-    # Защита на случай, если цену в конце забыли указать
     for t_item in temp_items_for_price:
         t_item["price"] = 0
         items.append(t_item)
         
     return items
 
-# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ (ИСПРАВЛЕНО СОЗДАНИЕ ТАБЛИЦ) ---
+# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -339,7 +334,6 @@ async def send_current_stock_as_text(callback: CallbackQuery):
             
         output_text += f"\n{cat_name}\n"
         
-        # Получаем уникальные цены строго в хронологическом порядке добавления
         cursor.execute('''
             SELECT price FROM products 
             WHERE category = ? AND count > 0 
@@ -350,7 +344,6 @@ async def send_current_stock_as_text(callback: CallbackQuery):
         
         for p_row in prices:
             price = p_row[0]
-            # Вытягиваем товары внутри ценового блока
             cursor.execute('''
                 SELECT brand, name, count FROM products 
                 WHERE category = ? AND price = ? AND count > 0 
@@ -718,7 +711,7 @@ async def delete_item_from_cart(callback: CallbackQuery):
 @dp.callback_query(F.data == "clear_cart")
 async def clear_cart(callback: CallbackQuery):
     conn = sqlite3.connect(DB_PATH)
-    cursor = cursor = conn.cursor()
+    cursor = conn.cursor()
     cursor.execute('DELETE FROM cart WHERE user_id = ?', (callback.from_user.id,))
     conn.commit()
     conn.close()
@@ -780,11 +773,15 @@ async def checkout_cart(callback: CallbackQuery):
     conn.commit()
     conn.close()
     
+    # Кодируем данные для кнопок админа
     items_encoded = "-".join(cancel_data_list)[:35]
-    admin_callback = f"cancelord_{user_id}_{items_encoded}"
     
+    # СОЗДАЕМ ДВЕ КНОПКИ ДЛЯ АДМИНА
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отменить бронь", callback_data=admin_callback)]
+        [
+            InlineKeyboardButton(text="✅ Продано", callback_data=f"doneord_{user_id}"),
+            InlineKeyboardButton(text="❌ Отменить бронь", callback_data=f"cancelord_{user_id}_{items_encoded}")
+        ]
     ])
     
     try:
@@ -797,6 +794,29 @@ async def checkout_cart(callback: CallbackQuery):
     await callback.message.edit_text(client_text, reply_markup=kb, parse_mode="HTML")
     await callback.answer("Успешно забронировано!", show_alert=True)
 
+# --- ХЕНДЛЕР НАЖАТИЯ КНОПКИ "ПРОДАНО" ДЛЯ АДМИНА ---
+@dp.callback_query(F.data.startswith("doneord_"))
+async def admin_done_order(callback: CallbackQuery):
+    if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
+    
+    client_id = int(callback.data.split("_")[1])
+    
+    # Отправляем уведомление клиенту
+    try:
+        await bot.send_message(
+            chat_id=client_id, 
+            text="🛍 <b>Ваш заказ успешно выкуплен!</b>\nСпасибо за покупку в ZKVR SHOP! Ждем вас снова. 🔥",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass # Если клиент заблокировал бота, просто игнорируем ошибку
+        
+    # Обновляем текст у админа, убирая кнопки
+    updated_text = callback.message.text + "\n\n💰 <b>СТАТУС: ✅ ТОВАР ПРОДАН</b>"
+    await callback.message.edit_text(updated_text, reply_markup=None, parse_mode="HTML")
+    await callback.answer("Заказ успешно закрыт (Продано)!", show_alert=True)
+
+# --- ХЕНДЛЕР НАЖАТИЯ КНОПКИ "ОТМЕНИТЬ БРОНЬ" ДЛЯ АДМИНА ---
 @dp.callback_query(F.data.startswith("cancelord_"))
 async def admin_cancel_order(callback: CallbackQuery):
     if int(callback.from_user.id) != int(str(ADMIN_ID).strip()): return
@@ -826,7 +846,7 @@ async def admin_cancel_order(callback: CallbackQuery):
     except Exception:
         pass
         
-    updated_text = callback.message.text + "\n\n❌ <b>БРОНЬ ОТМЕНЕНА АДМИНИСТРАТОРОМ</b>"
+    updated_text = callback.message.text + "\n\n❌ <b>СТАТУС: БРОНЬ ОТМЕНЕНА АДМИНИСТРАТОРОМ</b>"
     await callback.message.edit_text(updated_text, reply_markup=None, parse_mode="HTML")
     await callback.answer("Бронь успешно отменена, товары возвращены на склад!", show_alert=True)
 
